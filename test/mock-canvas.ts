@@ -54,7 +54,36 @@ export async function startMockCanvas() {
   app.get("/api/v1/courses/:id", (req, res) => {
     const c = courses.find((x) => String(x.id) === req.params.id);
     if (!c) return res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
-    res.json({ ...c, syllabus_body: "<h2>Syllabus</h2><p>Exams are <b>40%</b>.</p>" });
+    const syllabus: Record<number, string | null> = { 202: "<h2>Syllabus</h2><p>Exams are <b>40%</b>.</p>", 101: "<p> </p>" };
+    res.json({ ...c, syllabus_body: syllabus[c.id] ?? null });
+  });
+
+  // Syllabus fallback (issue #3). CS 240's syllabus page is empty; its syllabus is a module page plus a
+  // PDF. Its Pages tab is hidden (401). GEOL 101 has nothing, and its Files tab is hidden (403).
+  const needsSyllabusSearch = (req: express.Request) => req.query.search_term === "syllabus";
+  app.get("/api/v1/courses/:cid/files", (req, res) => {
+    if (req.params.cid === "303") return res.status(403).json({ status: "unauthorized", errors: [{ message: "user not authorized to perform that action" }] });
+    if (req.params.cid === "101" && needsSyllabusSearch(req)) return res.json([{ id: 501, display_name: "CS 240 Syllabus.pdf", updated_at: iso(-60) }]);
+    res.json([]);
+  });
+  app.get("/api/v1/courses/:cid/pages", (req, res) => {
+    if (req.params.cid === "101") return res.status(401).json({ status: "unauthorized", errors: [{ message: "user not authorized to perform that action" }] });
+    res.json([]);
+  });
+  app.get("/api/v1/courses/:cid/pages/:slug", (req, res) => {
+    if (req.params.cid === "101" && req.params.slug === "course-syllabus") {
+      return res.json({ url: "course-syllabus", title: "Course Syllabus", body: "<p>Late work loses <b>10% per day</b>.</p>", html_url: "https://canvas.test/courses/101/pages/course-syllabus" });
+    }
+    res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
+  });
+  app.get("/api/v1/courses/:cid/modules", (req, res) => {
+    if (req.params.cid !== "101" || !needsSyllabusSearch(req)) return res.json([]);
+    // The module's name matches, so Canvas returns all its items, matching or not.
+    res.json([{ id: 1, name: "Syllabus & Start Here", items: [
+      { id: 71, title: "CS 240 Syllabus.pdf", type: "File", content_id: 501, html_url: "https://canvas.test/courses/101/modules/items/71" },
+      { id: 72, title: "Course Syllabus", type: "Page", page_url: "course-syllabus", html_url: "https://canvas.test/courses/101/modules/items/72" },
+      { id: 73, title: "Welcome video", type: "ExternalUrl", external_url: "https://video.example/welcome" },
+    ] }]);
   });
 
   const assignments: Record<string, any> = {

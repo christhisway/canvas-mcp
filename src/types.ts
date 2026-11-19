@@ -98,3 +98,33 @@ export interface DiscussionTopic {
   author?: { display_name?: string };
   user_name?: string;
 }
+
+export interface CanvasFile {
+  id: number;
+  display_name: string;
+  updated_at?: string | null;
+}
+
+export interface Page {
+  url: string; // the page's slug, not a link
+  title: string;
+  html_url?: string;
+  body?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ModuleItem {
+  id: number;
+  title: string;
+  type: "File" | "Page" | "Discussion" | "Assignment" | "Quiz" | "SubHeader" | "ExternalUrl" | "ExternalTool" | string;
+  content_id?: number;
+  page_url?: string;
+  html_url?: string;
+  external_url?: string;
+}
+
+export interface Module {
+  id: number;
+  name: string;
+  items?: ModuleItem[];
+}

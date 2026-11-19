@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CanvasClient } from "../canvas.js";
 import { hasEnded, type CourseDirectory } from "../courses.js";
+import { findSyllabus } from "../syllabus.js";
 import { compact, errorResult, htmlToText, json, makeDateFormatter } from "../format.js";
 import type { Assignment, AssignmentGroup, Course, DiscussionTopic, PlannerItem, Submission } from "../types.js";
 
@@ -317,17 +318,16 @@ export function registerReadTools(
     "get_syllabus",
     {
       title: "Get syllabus",
-      description: "The course's syllabus page as text (empty if the instructor uses a file or module instead).",
+      description:
+        "The course's syllabus as text. If the syllabus page is empty, looks for a page, file or module item " +
+        "with \"syllabus\" in its name: a matching page's text is returned, and files come back as links in " +
+        "matches (their contents can't be read).",
       inputSchema: { course: courseRef },
       annotations: READ_ONLY,
     },
     wrap(async ({ course }) => {
       const c = await courses.resolve(course);
-      const full = await canvas.get<Course>(`/courses/${c.id}`, { include: ["syllabus_body"] });
-      return {
-        course: `${c.course_code} — ${c.name}`,
-        syllabus: htmlToText(full.syllabus_body, 15000) ?? "(no syllabus body on Canvas)",
-      };
+      return { course: `${c.course_code} — ${c.name}`, ...(await findSyllabus(canvas, c)) };
     }),
   );
 }

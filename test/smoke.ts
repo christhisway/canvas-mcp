@@ -380,6 +380,18 @@ try {
   await check("syllabus as text", async () => {
     const out = parse(await call("get_syllabus", { course: "philosophy" }));
     assert.match(out.syllabus, /40%/);
+    assert.equal(out.source, "syllabus page");
+  });
+
+  await check("empty syllabus page falls back to a module page, linking the PDF; hidden tabs are skipped", async () => {
+    const out = parse(await call("get_syllabus", { course: "CS 240" }));
+    assert.equal(out.source, 'page "Course Syllabus"');
+    assert.match(out.syllabus, /10% per day/);
+    assert.deepEqual(out.other_matches.map((m: any) => [m.type, m.name]), [["file", "CS 240 Syllabus.pdf"]]);
+    assert.match(out.other_matches[0].url, /\/courses\/101\/files\/501$/);
+    const none = parse(await call("get_syllabus", { course: "GEOL 101" }));
+    assert.equal(none.source, "none");
+    assert.match(none.syllabus, /no syllabus page/);
   });
 
   await check("every Canvas request was an authenticated GET", async () => {
