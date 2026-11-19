@@ -307,7 +307,7 @@ try {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
-      "get_assignment", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
+      "get_assignment", "get_feedback", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
       "list_announcements", "list_assignments", "list_courses", "read_file",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
@@ -366,6 +366,35 @@ try {
     const out = parse(await call("get_assignment", { course: "CS 240", assignment_id: 12 }));
     assert.match(out.instructions, /Reflect/);
     assert.equal(out.submission.comments[0].text, "Nice work");
+  });
+
+  await check("get_feedback shows rubric criteria, the grader's comments and comment attachments", async () => {
+    const out = parse(await call("get_feedback", { course: "PHIL 230", name: "essay" }));
+    assert.equal(out.id, 25);
+    assert.equal(out.score, 45);
+    assert.equal(out.out_of, 50);
+    assert.deepEqual(out.rubric[0], {
+      criterion: "Thesis", detail: "A clear, arguable claim.", points: 15, out_of: 20, rating: "Partial",
+      rating_detail: "Thesis is present but vague", comment: "State the claim in the first paragraph.",
+    });
+    assert.deepEqual(out.rubric.map((r: any) => [r.criterion, r.points, r.rating]), [["Thesis", 15, "Partial"], ["Evidence", 20, "Strong"], ["Mechanics", 10, undefined]]);
+    assert.equal(out.comments[0].from, "Prof. B");
+    assert.match(out.comments[0].at, /\d/);
+    assert.deepEqual(out.comments[0].attachments, [{ name: "essay1-markup.pdf", url: "https://canvas.test/files/9/download" }]);
+    assert.equal(out.note, undefined);
+  });
+
+  await check("get_feedback lists assignments with feedback, asks which of several matches, and flags ungraded work", async () => {
+    const list = parse(await call("get_feedback", { course: "PHIL 230" }));
+    assert.deepEqual(list.assignments.map((a: any) => [a.id, a.comments, a.rubric]), [[25, 1, true]]);
+    assert.match(list.assignments[0].latest_comment, /^Prof\. B: Good use of Searle/);
+    const cs = parse(await call("get_feedback", { course: "CS 240" }));
+    assert.deepEqual(cs.assignments.map((a: any) => a.name), ["Reflection"]);
+    const many = parse(await call("get_feedback", { course: "PHIL 230", name: "quiz" }));
+    assert.equal(many.matches.length, 4);
+    const ungraded = parse(await call("get_feedback", { course: "CS 240", name: "factory" }));
+    assert.match(ungraded.note, /Not graded yet/);
+    assert.equal(ungraded.rubric, undefined);
   });
 
   await check("get_grades computes group percentages and shows final score + missing work", async () => {

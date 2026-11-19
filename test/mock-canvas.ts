@@ -172,7 +172,16 @@ export async function startMockCanvas() {
     "22": { id: 22, course_id: 202, name: "Quiz 2", description: null, due_at: iso(-30), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_quiz"], html_url: "https://canvas.test/courses/202/assignments/22" },
     "23": { id: 23, course_id: 202, name: "Quiz 3", description: null, due_at: iso(-20), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_quiz"], html_url: "https://canvas.test/courses/202/assignments/23" },
     "24": { id: 24, course_id: 202, name: "Quiz 4", description: null, due_at: iso(-10), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_quiz"], html_url: "https://canvas.test/courses/202/assignments/24" },
-    "25": { id: 25, course_id: 202, name: "Essay 1", description: null, due_at: iso(-15), lock_at: null, unlock_at: null, points_possible: 50, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/202/assignments/25" },
+    // Essay 1 has a rubric for get_feedback (GitHub #3).
+    "25": { id: 25, course_id: 202, name: "Essay 1", description: null, due_at: iso(-15), lock_at: null, unlock_at: null, points_possible: 50, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/202/assignments/25", rubric: [
+      { id: "c1", description: "Thesis", long_description: "<p>A clear, arguable claim.</p>", points: 20, ratings: [
+        { id: "r1", description: "Full marks", points: 20 },
+        { id: "r2", description: "Partial", long_description: "Thesis is present but vague", points: 15 },
+        { id: "r3", description: "Missing", points: 0 },
+      ] },
+      { id: "c2", description: "Evidence", points: 20, ratings: [{ id: "r4", description: "Strong", points: 20 }, { id: "r5", description: "Weak", points: 10 }] },
+      { id: "c3", description: "Mechanics", points: 10, ratings: [] },
+    ] },
     "14": { id: 14, course_id: 101, name: "Observer Pattern Writeup", description: null, due_at: iso(-4), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/101/assignments/14" },
   };
   const mySubs: Record<string, any> = {
@@ -187,7 +196,9 @@ export async function startMockCanvas() {
     "22": { workflow_state: "graded", submitted_at: iso(-30), score: 5, grade: "5", attempt: 1 },
     "23": { workflow_state: "graded", submitted_at: iso(-20), score: 20, grade: "20", attempt: 1 },
     "24": { workflow_state: "graded", submitted_at: null, score: null, grade: null, attempt: null, excused: true },
-    "25": { workflow_state: "graded", submitted_at: iso(-16), score: 45, grade: "45", attempt: 1 },
+    "25": { workflow_state: "graded", submitted_at: iso(-16), graded_at: iso(-12), score: 45, grade: "45", attempt: 1,
+      rubric_assessment: { c1: { points: 15, rating_id: "r2", comments: "State the claim in the first paragraph." }, c2: { points: 20, rating_id: "r4", comments: "" }, c3: { points: 10, comments: "" } },
+      submission_comments: [{ author_name: "Prof. B", comment: "Good use of Searle. See my markup.", created_at: iso(-12), attachments: [{ display_name: "essay1-markup.pdf", url: "https://canvas.test/files/9/download" }] }] },
     "16": { workflow_state: "submitted", submitted_at: iso(-3), score: null, grade: null, attempt: 1 },
   };
 
@@ -196,6 +207,7 @@ export async function startMockCanvas() {
       Object.values(assignments)
         .filter((a) => String(a.course_id) === req.params.cid)
         .filter((a) => req.query.bucket !== "undated" || a.due_at === null)
+        .filter((a) => !req.query.search_term || a.name.toLowerCase().includes(String(req.query.search_term).toLowerCase()))
         .map((a) => ({ ...a, submission: mySubs[a.id] })),
     );
   });
@@ -203,6 +215,15 @@ export async function startMockCanvas() {
     const a = assignments[req.params.aid];
     if (!a) return res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
     res.json(a);
+  });
+  // The calling student's submissions in a course (no student_ids, so Canvas means "me").
+  app.get("/api/v1/courses/:cid/students/submissions", (req, res) => {
+    const include = ([] as string[]).concat((req.query["include[]"] as string | string[]) ?? []);
+    res.json(
+      Object.values(assignments)
+        .filter((a) => String(a.course_id) === req.params.cid)
+        .map((a) => ({ ...mySubs[a.id], assignment_id: a.id, assignment: include.includes("assignment") ? a : undefined })),
+    );
   });
   app.get("/api/v1/courses/:cid/assignments/:aid/submissions/self", (req, res) => {
     res.json(mySubs[req.params.aid]);
