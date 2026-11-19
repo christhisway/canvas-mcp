@@ -101,6 +101,13 @@ check_public_url() {
   fi
 }
 
+warn_if_admin() {
+  if id -Gn | tr ' ' '\n' | grep -qx admin; then
+    echo "warning: $USER is an admin account. ADR 8 runs connectors as a dedicated standard user" >&2
+    echo "         (docs/architecture/0008-dedicated-user-filevault-off.md). Continuing anyway." >&2
+  fi
+}
+
 loaded() { launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; }
 
 start() {
@@ -127,6 +134,7 @@ health() {
 
 case "${1:-}" in
   install)
+    warn_if_admin
     check_env
     build
     mkdir -p "$(dirname "$PLIST")" "$(dirname "$LOG")"
@@ -159,7 +167,12 @@ case "${1:-}" in
   funnel)
     port="$(env_value PORT 8787)"
     ts="$(ts_bin)"
-    "$ts" funnel --bg "$port" || die "Funnel failed. If it printed a link, open it to enable Funnel for this machine, then re-run. If it said 'access denied', run: sudo tailscale funnel --bg $port, then re-run this to print the URLs"
+    if ! "$ts" funnel --bg "$port"; then
+      # The service user may not be allowed to change Funnel; it's fine if an admin already turned it on.
+      "$ts" funnel status 2>/dev/null | grep -q "127.0.0.1:$port" \
+        || die "Funnel failed. If it printed a link, open it to enable Funnel, then re-run. If it said 'access denied', run 'sudo tailscale funnel --bg $port' from the admin account, then re-run this."
+      echo "(couldn't change Funnel as $USER, but it's already serving port $port)"
+    fi
     "$ts" funnel status
     url="$(funnel_url)"
     echo

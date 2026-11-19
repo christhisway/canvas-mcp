@@ -1,23 +1,32 @@
 # Deploy checklist: server Mac
 
-Step-by-step setup for the home-server Mac. Do everything here on **that** Mac unless a step says otherwise. Tick the boxes as you go; GitHub renders them as checkboxes.
+Step-by-step setup for the home-server Mac. Tick the boxes as you go; GitHub renders them as checkboxes.
 
-Why it's built this way: [docs/architecture/](architecture/README.md). Background on each piece: [README](../README.md).
+You'll use **two macOS accounts** on that Mac:
+
+- **Your admin account** for system setup (Homebrew, `pmset`, Tailscale, privacy permissions).
+- **A dedicated standard user**, called `connectors` below, that runs the connectors and logs in automatically.
+
+[ADR 8](architecture/0008-dedicated-user-filevault-off.md) explains why: with FileVault off, the disk should hold only secrets you can revoke. Other decisions are in [docs/architecture/](architecture/README.md), and background is in the [README](../README.md).
 
 ## 0. Before you start
 
-You'll need these along the way:
+You'll need:
 
 - [ ] **Access to the Azure portal** with the account that owns the To Do connector's app registration.
-- [ ] **A Tailscale account** (sign up at tailscale.com; the free plan is enough).
-- [ ] **The ntfy app on your phone**, from the App Store.
-- [ ] **Which Microsoft account you'll sign in with** when you connect Canvas in claude.ai. Its email goes in `ALLOWED_EMAILS`. It doesn't have to be the account you use for To Do, but a personal account is safest. A school account may be blocked from consenting to a third-party app.
-- [ ] **About an hour,** and a low-stakes Canvas assignment (or a sandbox course) for the submission test at the end.
+- [ ] **A Tailscale account** (the free plan is enough).
+- [ ] **The ntfy app on your phone.**
+- [ ] **The Microsoft account you'll sign in with** when you connect Canvas in claude.ai. Its email goes in `ALLOWED_EMAILS`.
+  - It doesn't have to be the account you use for To Do.
+  - A personal account is safest, because a school account may be blocked from consenting to a third-party app.
+- [ ] **A new, unique password** for the `connectors` user. Automatic login stores it on disk in a recoverable form, so don't reuse it anywhere.
+- [ ] **A low-stakes Canvas assignment** (or a sandbox course) for the submission test, and about an hour and a half.
 
-## 1. Prepare the Mac
+## 1. Admin account: prepare the Mac
 
-- [ ] Plug in the power adapter, and install pending macOS updates now so they don't restart the Mac mid-setup.
-- [ ] Keep it awake and have it restart after a power cut:
+- [ ] **Power and updates.** Plug in the power adapter, and install pending macOS updates now.
+- [ ] **FileVault is off:** System Settings → Privacy & Security → FileVault.
+- [ ] **Keep it awake** and restart it after a power cut:
   ```bash
   sudo pmset -a sleep 0 disksleep 0 autorestart 1
   ```
@@ -25,149 +34,199 @@ You'll need these along the way:
   ```bash
   sudo pmset -a disablesleep 1
   ```
-- [ ] Check the settings took: `pmset -g` shows `sleep 0`. With the lid-closed setting, it also shows `SleepDisabled 1`.
-- [ ] **Turn on automatic login:** System Settings → Users & Groups → Automatically log in as → your user.
-  - The server runs as a launchd *agent*, which only runs while you're logged in.
-  - This option is greyed out while FileVault is on. Either turn FileVault off, or accept logging in by hand after every reboot.
-- [ ] **Decide how macOS updates install:** System Settings → General → Software Update → Automatic Updates. With automatic login on, a restart for an update recovers on its own. With FileVault on, it waits for you to log in.
-- [ ] **Turn on SSH,** so you can manage the server from your laptop over Tailscale: System Settings → General → Sharing → Remote Login.
+- [ ] **Check:** `pmset -g` shows `sleep 0`, and with the lid-closed setting, `SleepDisabled 1`.
+- [ ] **Decide how macOS updates install:** System Settings → General → Software Update → Automatic Updates. A restart for an update comes back on its own through automatic login.
 
-## 2. Install tools
+## 2. Admin account: create the service user
 
-- [ ] **Install Homebrew** if `brew -v` fails: follow the one-line installer on [brew.sh](https://brew.sh), then run the two `eval` lines it prints.
-- [ ] Install the tools:
+- [ ] **Create the user.** System Settings → Users & Groups → **Add User**:
+  - Type: **Standard** (not Administrator)
+  - Name: `connectors`
+  - Password: the unique one from step 0
+- [ ] **Log in automatically:** System Settings → Users & Groups → **Automatically log in as** → `connectors`.
+- [ ] **Turn on SSH.** System Settings → General → Sharing → **Remote Login** on. Under "Allow access for", choose **Only these users**: `connectors` and your admin account.
+
+## 3. Admin account: install tools
+
+- [ ] **Homebrew.** If `brew -v` fails, install it from [brew.sh](https://brew.sh) and run the two `eval` lines it prints.
+- [ ] **Install the tools:**
   ```bash
-  brew install node git gh tailscale
+  brew install node git tailscale
   ```
-- [ ] **Check Node.** `node -v` should show v20.12 or newer, and `which node` should be `/opt/homebrew/bin/node`.
-  - Plain `node` is used on purpose. `node@22` is keg-only, so it isn't on PATH, and `deploy/ctl.sh` would fail to find it.
-- [ ] Sign in to GitHub so you can clone the private repo:
-  ```bash
-  gh auth login
-  gh auth setup-git
-  ```
+  The `connectors` user can run these but can't install or upgrade them. Upgrades always happen from this account.
+- [ ] **Check Node:** `/opt/homebrew/bin/node -v` shows v20.12 or newer.
+  - Use plain `node`, not `node@22`. `node@22` is keg-only, so it isn't on PATH, and `deploy/ctl.sh` wouldn't find it.
 
-## 3. Tailscale
+## 4. Admin account: Tailscale
 
-- [ ] Start the daemon (it then starts at every boot, even before login) and sign in:
+- [ ] **Start the daemon** (it then runs at every boot) and sign in. `--operator` lets the `connectors` user run `tailscale` commands without `sudo`.
   ```bash
   sudo brew services start tailscale
-  sudo tailscale up --operator=$USER
+  sudo tailscale up --operator=connectors
   ```
-  Open the link it prints and sign in. `--operator` lets later `tailscale` commands run without `sudo`. If one still says access denied, prefix it with `sudo`.
-- [ ] Check `tailscale status`: this Mac should be listed and online.
-- [ ] **In the [admin console](https://login.tailscale.com/admin/machines), open this machine's ⋯ menu:**
-  - [ ] **Edit machine name** to something permanent, for example `home-server`. The name becomes part of the public URL, and changing it later means redoing the Azure redirect URI and the claude.ai connector.
-  - [ ] **Disable key expiry.** By default the machine's key expires after 180 days. When it does, the Mac drops off Tailscale and the connector goes down without warning.
+  Open the link it prints and sign in.
+- [ ] In the [admin console](https://login.tailscale.com/admin):
+  - [ ] **Machines → this Mac → ⋯ → Edit machine name.** Pick something permanent, like `home-server`, because it becomes part of the public URL.
+  - [ ] **DNS:** MagicDNS is on, and **HTTPS Certificates** is enabled.
+  - [ ] **Access controls:** the policy below lets your own devices reach each other, and reach the server **only over SSH**. It gives the server no access to anything else, and allows Funnel on it.
+    - If the policy is still the default, replace it with this. Otherwise merge these parts in.
+    - The editor validates the policy when you save.
 
-## 4. Clone the repo
+    ```jsonc
+    {
+      "tagOwners": {
+        "tag:server": ["autogroup:admin"]
+      },
+      "grants": [
+        // Your devices can reach each other...
+        { "src": ["autogroup:member"], "dst": ["autogroup:member"], "ip": ["*"] },
+        // ...and the server, but only over SSH. Nothing grants the server access to anything.
+        { "src": ["autogroup:member"], "dst": ["tag:server"], "ip": ["tcp:22"] }
+      ],
+      "nodeAttrs": [
+        { "target": ["tag:server"], "attr": ["funnel"] }
+      ]
+    }
+    ```
+  - [ ] **Machines → this Mac → ⋯ → Edit ACL tags → add `tag:server`.** Tagged machines also don't have key expiry, so the server won't drop off Tailscale after 180 days.
+- [ ] **Check:** `tailscale status` shows this Mac online.
 
-- [ ] Clone it and create the config file:
+## 5. `connectors` user: set up the account
+
+Log out of the admin account and log in as `connectors`. Do every step from here on as `connectors`, unless a step says otherwise.
+
+- [ ] **Screen lock:**
+  - System Settings → Lock Screen: **Turn display off when inactive** after 1–2 minutes, and **Require password** immediately.
+  - Don't sign in to an Apple ID on this account.
+- [ ] **Create a read-only deploy key for the repo:**
   ```bash
-  git clone https://github.com/christhisway/canvas-mcp.git ~/development/canvas-mcp
-  cd ~/development/canvas-mcp
+  ssh-keygen -t ed25519 -f ~/.ssh/canvas-mcp-deploy -N "" -C "canvas-mcp deploy (home-server)"
+  cat ~/.ssh/canvas-mcp-deploy.pub
+  ```
+- [ ] **Add the key to GitHub.** On GitHub → christhisway/canvas-mcp → Settings → Deploy keys → **Add deploy key**. Paste the public key and leave **Allow write access unticked**.
+  - Or, from your laptop: `gh repo deploy-key add <file>.pub -R christhisway/canvas-mcp`
+- [ ] **Tell SSH to use that key for this repo.** Add this to `~/.ssh/config`:
+  ```
+  Host github-canvas-mcp
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/canvas-mcp-deploy
+    IdentitiesOnly yes
+  ```
+- [ ] **Clone the repo and create the config file:**
+  ```bash
+  mkdir -p ~/connectors
+  git clone github-canvas-mcp:christhisway/canvas-mcp.git ~/connectors/canvas-mcp
+  cd ~/connectors/canvas-mcp
   cp .env.example .env && chmod 600 .env
   ```
+  On the first connection, compare the host fingerprint against [GitHub's published fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints) before typing `yes`.
 
-## 5. Turn on Funnel
+## 6. `connectors` user: turn on Funnel
 
 - [ ] Run:
   ```bash
   deploy/ctl.sh funnel
   ```
-  - The first time, Tailscale may print a link to enable HTTPS certificates and Funnel for your tailnet. Open it, approve, and run the command again.
-  - Ignore the `PUBLIC_URL` mismatch warning at the end for now; `.env` isn't filled in yet.
+  - If it says access denied, run `sudo tailscale funnel --bg 8787` from the admin account (over SSH works), then run `deploy/ctl.sh funnel` again here.
+  - If Tailscale prints a link to enable Funnel, open it, approve, and run the command again.
+  - Ignore the `PUBLIC_URL` mismatch warning for now.
 - [ ] **Write down the three lines it prints:**
   - `PUBLIC_URL=https://<machine>.<tailnet>.ts.net`
   - the Azure redirect URI, `…/callback`
   - the connector URL, `…/mcp`
 
-## 6. Azure (any machine with a browser)
+## 7. Azure (any machine with a browser)
 
-Go to [portal.azure.com](https://portal.azure.com) → Microsoft Entra ID → App registrations → the **To Do connector's** app.
+[portal.azure.com](https://portal.azure.com) → Microsoft Entra ID → App registrations → the **To Do connector's** app:
 
-- [ ] **Authentication → Web → Add URI:** paste the redirect URI from step 5, then click Save.
+- [ ] **Authentication → Web → Add URI:** the redirect URI from step 6. Click **Save**.
 - [ ] **Certificates & secrets → New client secret.**
-  - Name it `canvas-mcp` (separate from the To Do connector's secret).
+  - Name it `canvas-mcp`.
   - Copy the **Value** (not the Secret ID) right away; it's only shown once.
-- [ ] **Note the secret's expiry date** and set a reminder a week before it, for example a task in To Do.
+- [ ] **Note the secret's expiry date** and set a reminder a week before it.
 - [ ] **Overview:** copy the **Application (client) ID**.
-- [ ] **API permissions:** confirm Microsoft Graph `User.Read` is listed (it already is for To Do).
+- [ ] **API permissions:** confirm Microsoft Graph `User.Read` is listed.
 
-## 7. Canvas token (any browser signed in to Canvas)
+## 8. Canvas token (any browser signed in to Canvas)
 
-- [ ] Note the Canvas address from your browser's address bar, for example `https://<something>.instructure.com`. That's `CANVAS_BASE_URL`, without any path.
-- [ ] Go to Canvas → Account → Settings → **+ New Access Token**.
-  - Purpose: "Claude connector". Set an expiry date if you want one, and if you do, add a reminder.
+- [ ] **Note the Canvas address** from your browser's address bar, for example `https://<something>.instructure.com`. That's `CANVAS_BASE_URL`.
+- [ ] **Create the token.** Canvas → Account → Settings → **+ New Access Token**:
+  - Purpose: "Claude connector".
+  - **Expires: the last day of the semester.** This limits the damage if the Mac is ever stolen.
   - Copy the token now; Canvas won't show it again.
+- [ ] **Set a reminder** for the day before it expires, to create the next one.
 
-## 8. ntfy (approval codes)
+## 9. ntfy (approval codes)
 
-- [ ] Generate a long random topic name. Anyone who knows it can read your approval codes.
-  ```bash
-  openssl rand -hex 16
-  ```
-- [ ] In the ntfy app, tap **+**, enter the topic, and subscribe on the default server (ntfy.sh).
-- [ ] Send a test. Your phone should show a notification within a few seconds.
-  ```bash
-  curl -d "canvas-mcp test" https://ntfy.sh/<topic>
-  ```
+- [ ] **Generate a topic name:** `openssl rand -hex 16`. Anyone who knows the topic can read your approval codes.
+- [ ] **Subscribe your phone:** in the ntfy app, tap **+** and subscribe to that topic on ntfy.sh.
+- [ ] **Send a test:** `curl -d "canvas-mcp test" https://ntfy.sh/<topic>`. Your phone should show it within a few seconds.
 
-## 9. Submissions folder (optional: iCloud Drive)
+## 10. Submissions folder
 
-Skip this to use `./submissions` inside the repo.
+The default is `./submissions` inside the checkout (`~/connectors/canvas-mcp/submissions`). From your laptop, copy files in over Tailscale:
 
-- [ ] **On the server Mac,** System Settings → Apple Account → iCloud → iCloud Drive is on. Under its options, **Optimize Mac Storage** is off, so files are really on disk.
-- [ ] Create the folder:
-  ```bash
-  mkdir -p ~/Library/Mobile\ Documents/com~apple~CloudDocs/Canvas\ Submissions
-  ```
-- [ ] **Find the full path** with `echo ~/Library/Mobile\ Documents/com~apple~CloudDocs/Canvas\ Submissions`. `.env` needs that full `/Users/...` path, because it doesn't expand `~/`. The folder name's spaces are fine as-is, with no quotes.
+```bash
+scp report.pdf connectors@<machine>:connectors/canvas-mcp/submissions/
+```
 
-## 10. Fill in `.env`
+- [ ] **Create the folder:** `mkdir -p ~/connectors/canvas-mcp/submissions`
 
-Edit `~/development/canvas-mcp/.env` (for example `nano .env`):
+**Optional: add files from your phone.** This route keeps your own Apple ID off the server: a separate Apple ID on the `connectors` user sees only one folder you share with it.
+
+- [ ] **Create a new Apple ID** used only for this. It may ask for a phone number.
+- [ ] **On the `connectors` user, sign in to iCloud with it.**
+  - Turn on only **iCloud Drive**, with Optimize Mac Storage **off**.
+  - Turn off Keychain, Photos and everything else.
+- [ ] **On your phone, share a folder with it.** In the Files app → iCloud Drive, create `Canvas Submissions`, then long-press → **Share**. Only invited people get access, with **Can make changes**. Invite the new Apple ID.
+- [ ] **On the server, accept the invite.** The folder then appears at `~/Library/Mobile Documents/com~apple~CloudDocs/Canvas Submissions`.
+  - Use that full `/Users/connectors/...` path for `SUBMISSIONS_DIR`. `.env` doesn't expand `~/`, and spaces are fine without quotes.
+
+## 11. Fill in `.env`
+
+Edit `~/connectors/canvas-mcp/.env`, for example with `nano .env`:
 
 | Key | Value |
 |---|---|
-| `CANVAS_BASE_URL` | from step 7 |
-| `CANVAS_TOKEN` | from step 7 |
-| `PUBLIC_URL` | from step 5 (no trailing slash) |
-| `MS_CLIENT_ID` | Application (client) ID from step 6 |
-| `MS_CLIENT_SECRET` | secret **Value** from step 6 |
+| `CANVAS_BASE_URL` | from step 8 |
+| `CANVAS_TOKEN` | from step 8 |
+| `PUBLIC_URL` | from step 6 (no trailing slash) |
+| `MS_CLIENT_ID` | Application (client) ID from step 7 |
+| `MS_CLIENT_SECRET` | secret **Value** from step 7 |
 | `MS_TENANT` | leave as `common` |
-| `ALLOWED_EMAILS` | the email of the Microsoft account you'll sign in with (from step 0) |
+| `ALLOWED_EMAILS` | the email of the Microsoft account from step 0 |
 | `COOKIE_SECRET` | output of `openssl rand -hex 32` |
-| `NTFY_URL` | `https://ntfy.sh/<topic>` from step 8 |
-| `SUBMISSIONS_DIR` | full path from step 9, or leave `./submissions` |
+| `NTFY_URL` | `https://ntfy.sh/<topic>` from step 9 |
+| `SUBMISSIONS_DIR` | leave `./submissions`, or the full shared-folder path from step 10 |
 | `TIME_ZONE` | leave as `America/New_York` |
 
-- [ ] All keys filled in. `deploy/ctl.sh install` refuses to run while any placeholder is left.
+- [ ] All keys are filled in. `deploy/ctl.sh install` refuses to run while any placeholder is left.
 
-## 11. Install and start
+## 12. Install and start
 
-- [ ] Run:
+- [ ] **Install:**
   ```bash
   deploy/ctl.sh install
   ```
-  Expect `healthy on 127.0.0.1:8787 (public: https://…/mcp)` and no `PUBLIC_URL` warning.
-- [ ] Check `deploy/ctl.sh status`: `state = running` and healthy.
+  Expect `healthy on 127.0.0.1:8787 (public: https://…/mcp)`. There should be no admin-account warning and no `PUBLIC_URL` warning.
+- [ ] **Check status:** `deploy/ctl.sh status` shows `state = running` and healthy.
 - [ ] **From outside your network** (your phone with Wi-Fi off), open:
   - [ ] `<PUBLIC_URL>/healthz`, which should show `{"ok":true}`
   - [ ] `<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp`, which should be JSON naming `<PUBLIC_URL>/mcp`
 
   A brand-new Funnel hostname can take a few minutes to resolve.
 
-## 12. Connect in claude.ai
+## 13. Connect in claude.ai
 
-- [ ] **On the server (or over SSH),** keep the log open: `deploy/ctl.sh logs`
-- [ ] In claude.ai, go to Settings → Connectors → **Add custom connector**. Name it "Canvas", give it the connector URL from step 5, then click **Connect**.
-- [ ] Approve the consent page and sign in with your Microsoft account. You should land back in claude.ai, connected.
-- [ ] The log shows `Sign-in approved for <your email>`.
-  - If you see `CIMD fetch failed`, set `CIMD_ALLOWED_HOSTS=none` in `.env`, run `deploy/ctl.sh restart`, and connect again.
-- [ ] **Optional second gate:** set the connector's `confirm_submission` permission to **Ask**.
+- [ ] **Keep the log open on the server:** `deploy/ctl.sh logs` (over SSH works).
+- [ ] **Add the connector.** In claude.ai → Settings → Connectors → **Add custom connector**: name it "Canvas", enter the connector URL from step 6, then click **Connect**.
+- [ ] **Sign in.** Approve the consent page and sign in with the Microsoft account from step 0. You should land back in claude.ai, connected.
+- [ ] **Check the log** shows `Sign-in approved for <your email>`.
+  - If it shows `CIMD fetch failed`, set `CIMD_ALLOWED_HOSTS=none` in `.env`, run `deploy/ctl.sh restart`, and connect again.
+- [ ] **Optional:** set the connector's `confirm_submission` permission to **Ask**.
 
-## 13. Try every read tool
+## 14. Try every read tool
 
 In a new chat with the connector enabled, ask:
 
@@ -178,31 +237,36 @@ In a new chat with the connector enabled, ask:
 - [ ] "Any new announcements?" (`list_announcements`)
 - [ ] "Show the syllabus for <course>" (`get_syllabus`)
 
-Paste any errors or odd output into a Claude Code session in this repo; these are the parts never tested against real Canvas.
+Paste any errors or odd output into a Claude Code session in this repo. These tools have never run against real Canvas.
 
-## 14. Submission test (low stakes)
+## 15. Submission test (low stakes)
 
-- [ ] Put a test file in the submissions folder, then ask "What files are ready to submit?" (`list_submission_files`).
-  - If it fails with a permission error, go to System Settings → Privacy & Security → **Full Disk Access**, add `/opt/homebrew/bin/node` (the real binary is under `/opt/homebrew/Cellar/node/…`; add both if one doesn't take), then run `deploy/ctl.sh restart`.
-- [ ] Ask Claude to submit it to the practice assignment. Check the preview, and check that the phone gets the code while the code **doesn't** appear in the chat.
-- [ ] Type the code. Claude reports `submitted`, and the submission shows in Canvas.
+- [ ] **Add a test file** to the submissions folder, then ask "What files are ready to submit?" (`list_submission_files`).
+  - If it fails with a permission error on the shared iCloud folder, use the admin account to add `/opt/homebrew/bin/node` under System Settings → Privacy & Security → **Full Disk Access**. The real binary is under `/opt/homebrew/Cellar/node/…`; add that too if the first doesn't take. Then run `deploy/ctl.sh restart`.
+- [ ] **Ask Claude to submit it** to the practice assignment. Check the preview, and check that the code arrives on your phone but **doesn't** appear in the chat.
+- [ ] **Type the code.** Claude reports `submitted`, and the submission shows in Canvas.
   - If the upload fails, keep the log lines; the storage-upload step is the least-tested part.
 
-## 15. Resilience checks
+## 16. Resilience and isolation checks
 
-- [ ] **Reboot test.** Run `sudo reboot`. After it comes back, with no one touching it, `<PUBLIC_URL>/healthz` works from your phone, and the connector still answers in claude.ai.
+- [ ] **Reboot test.** Run `sudo reboot` from the admin account. Once it's back, with no one touching it:
+  - it's logged in as `connectors` and the screen locks
+  - `<PUBLIC_URL>/healthz` works from your phone
+  - the connector still answers in claude.ai
 - [ ] **Refresh test.** More than an hour after connecting, use the connector again. It should work without asking you to reconnect, and the log shows a `POST /token`.
-- [ ] **SSH from your laptop** (with Tailscale installed there): `ssh <user>@<machine-name>`, then run `cd ~/development/canvas-mcp && deploy/ctl.sh status`.
+- [ ] **SSH from your laptop** (with Tailscale installed there): `ssh connectors@<machine>`, then `cd ~/connectors/canvas-mcp && deploy/ctl.sh status`.
+- [ ] **Isolation.** From the server, try `ssh <you>@<laptop>` or `curl http://<laptop>:<some open port>`. It should time out, because the server can't reach your other devices.
 
-## 16. Reminders to set
+## 17. Reminders to set
 
-- [ ] The Azure client secret's expiry date (from step 6). Rotate it by creating a new secret, updating `MS_CLIENT_SECRET`, and running `deploy/ctl.sh restart`.
-- [ ] The Canvas token's expiry, if you set one. Rotate it by creating a new token, updating `CANVAS_TOKEN`, and restarting.
-- [ ] Tailscale key expiry is disabled (step 3), so there's nothing to set for it.
+- [ ] **Azure client secret expiry** (step 7). To rotate: create a new secret, update `MS_CLIENT_SECRET`, then `deploy/ctl.sh restart`.
+- [ ] **Canvas token expiry** at the end of the semester (step 8). To rotate: create a new token, update `CANVAS_TOKEN`, then `deploy/ctl.sh restart`.
 
 ## Day-to-day
 
-| Task | Command (in `~/development/canvas-mcp`) |
+As `connectors`, in `~/connectors/canvas-mcp`:
+
+| Task | Command |
 |---|---|
 | Deploy new code after a push | `deploy/ctl.sh update` |
 | Is it up? | `deploy/ctl.sh status` |
@@ -210,3 +274,16 @@ Paste any errors or odd output into a Claude Code session in this repo; these ar
 | Restart | `deploy/ctl.sh restart` |
 | Sign out every client (suspected leak) | `deploy/ctl.sh revoke`, then reconnect in claude.ai |
 | Funnel address / mismatch check | `deploy/ctl.sh funnel` |
+| Upgrade Node | `brew upgrade node` **from the admin account**, then `deploy/ctl.sh restart` here |
+
+## If the Mac is lost or stolen
+
+Do these from any other device, in this order:
+
+1. **Tailscale admin console:** remove the machine. This cuts it off the tailnet and turns off Funnel.
+2. **Canvas** → Account → Settings → Approved Integrations: delete the "Claude connector" token.
+3. **Azure portal** → the app → Certificates & secrets: delete the `canvas-mcp` secret.
+4. **GitHub** → christhisway/canvas-mcp → Settings → Deploy keys: delete the server's key.
+5. **If you set up the shared iCloud folder:** stop sharing it with the server's Apple ID.
+
+Then set up a new machine from the top of this checklist. Connecting again issues new tokens, and anything the old server issued is useless without it.

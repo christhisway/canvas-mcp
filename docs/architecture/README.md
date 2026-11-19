@@ -11,3 +11,4 @@ Important decisions for canvas-mcp, one record per file. Read the relevant ADR b
 | [5](0005-out-of-band-submission-approval.md) | Every submission needs an out-of-band approval code | Accepted |
 | [6](0006-canvas-personal-access-token.md) | Reach Canvas with a personal access token | Accepted |
 | [7](0007-tailscale-funnel.md) | Publish the server with Tailscale Funnel | Accepted |
+| [8](0008-dedicated-user-filevault-off.md) | Run connectors as a dedicated standard user, with FileVault off and automatic login | Accepted |

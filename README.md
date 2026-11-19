@@ -46,18 +46,30 @@ Codes expire after 15 minutes and are single-use, and three wrong guesses cancel
 
 ## Deploy (on the server Mac)
 
-**Follow [docs/deploy-checklist.md](docs/deploy-checklist.md).** It's the step-by-step list, from preparing the Mac to the first real submission. In outline:
+**Follow [docs/deploy-checklist.md](docs/deploy-checklist.md).** It's the step-by-step list, from preparing the Mac to the first real submission.
 
-1. **Keep the Mac awake and logged in.** Set `pmset`, turn on automatic login (launchd agents only run while you're logged in), and turn on Remote Login for SSH.
-2. **Install tools:** `brew install node git gh tailscale`, then sign in to GitHub.
-3. **Tailscale.** Run `sudo brew services start tailscale` and `sudo tailscale up`. In the admin console, give the machine a permanent name and **disable key expiry**.
-4. **Clone the repo, then run `deploy/ctl.sh funnel`.** It turns on Funnel and prints `PUBLIC_URL`, the Azure redirect URI and the connector URL. claude.ai calls the connector from Anthropic's servers, so it needs this public HTTPS address. HTTPS ends on the Mac; Tailscale only relays the traffic.
-5. **Gather the secrets.**
-   - Azure: add `<PUBLIC_URL>/callback` to the To Do app registration and create a separate client secret.
-   - Canvas: create a personal access token.
-   - ntfy: subscribe your phone to a long random topic.
-6. **Fill in `.env`,** then run `deploy/ctl.sh install`. It builds the server, writes a launchd agent with this Mac's paths, and starts it.
-7. **Add `<PUBLIC_URL>/mcp`** as a custom connector in claude.ai and sign in with Microsoft.
+The server runs as a dedicated **standard** macOS user (`connectors`) that logs in automatically. Your admin account does the system setup. FileVault is off so automatic login works, which is why the disk holds only secrets you can revoke ([ADR 8](docs/architecture/0008-dedicated-user-filevault-off.md)). In outline:
+
+1. **Admin account:**
+   - run `pmset` so the Mac stays awake
+   - create the `connectors` user and set it to log in automatically
+   - turn on Remote Login for SSH
+   - `brew install node git tailscale`
+2. **Admin account, Tailscale:**
+   - start the daemon with `--operator=connectors`
+   - name the machine
+   - add the policy that limits the server to inbound SSH and allows Funnel
+   - tag the machine `tag:server` (tagged machines don't have key expiry)
+3. **`connectors` user:**
+   - set a quick screen lock
+   - create a **read-only deploy key**, then clone to `~/connectors/canvas-mcp`
+   - run `deploy/ctl.sh funnel`, which prints `PUBLIC_URL`, the Azure redirect URI and the connector URL. claude.ai calls the connector from Anthropic's servers, so it needs this public HTTPS address. HTTPS ends on the Mac; Tailscale only relays the traffic.
+4. **Gather the secrets:**
+   - Azure: add `<PUBLIC_URL>/callback` to the To Do app registration and create a separate client secret
+   - Canvas: a personal access token that **expires at the end of the semester**
+   - ntfy: a long random topic
+5. **Fill in `.env`,** then run `deploy/ctl.sh install`. It builds the server, writes a launchd agent with this Mac's paths, and starts it.
+6. **Add `<PUBLIC_URL>/mcp`** as a custom connector in claude.ai and sign in with Microsoft.
 
 Day-to-day:
 
