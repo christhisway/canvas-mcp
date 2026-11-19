@@ -2,7 +2,10 @@
 
 A personal, read-only MCP connector for Canvas LMS. Claude can read your courses, what's due, assignments, grades, announcements and syllabi. It can't submit or change anything; you hand work in yourself ([ADR 9](docs/architecture/0009-read-only-no-submissions.md)).
 
-It runs as a Node server on a Mac at home, published over HTTPS with Tailscale Funnel. You connect it in claude.ai by signing in with your Microsoft account, the same way as the Microsoft To Do connector.
+There are two ways to run it:
+
+- **Locally,** for Claude Desktop or Claude Code on your own computer. You need Node and a Canvas token, nothing else. See [Run it locally](#run-it-locally-claude-desktop--claude-code).
+- **As a server** on an always-on Mac, published over HTTPS with Tailscale Funnel. You connect it in claude.ai by signing in with your Microsoft account, the same way as the Microsoft To Do connector. This is the only way to use it from claude.ai on the web or your phone. See [Deploy](#deploy-on-the-server-mac).
 
 ## Tools
 
@@ -43,7 +46,65 @@ Claude ──▶ https://<machine>.<tailnet>.ts.net/mcp (Bearer token, via Tails
 
 Why it's built this way (Node on a home server, Microsoft sign-in, Funnel, read-only) is recorded in [docs/architecture/](docs/architecture/README.md).
 
+## Run it locally (Claude Desktop / Claude Code)
+
+The quick setup, if you just want Claude to see your own Canvas. Claude Desktop or Claude Code starts the connector on your computer when it needs it, so there's no server, tunnel or Microsoft sign-in ([ADR 13](docs/architecture/0013-local-stdio-mode.md)). The catch: it only works in those two apps on this computer, not in claude.ai on the web or your phone.
+
+1. **Install Node 22.13 or newer** (`node -v` to check), then build:
+
+   ```bash
+   git clone https://github.com/christhisway/canvas-mcp.git
+   cd canvas-mcp
+   npm ci
+   npm run build
+   pwd    # you'll need this path below
+   ```
+
+2. **Get a Canvas token.** In Canvas: Account → Settings → **+ New Access Token**. Give it an expiry date (the end of the semester is a good one) and copy it. It has the full power of your Canvas account, so treat it like a password and never commit it. The connector itself only ever reads.
+
+3. **Add it to Claude.** Replace `/path/to/canvas-mcp` with the path from step 1, and the Canvas address with the one in your browser when you're logged in.
+
+   **Claude Desktop:** Settings → Developer → Edit Config, then add this to `claude_desktop_config.json` and restart Claude Desktop:
+
+   ```json
+   {
+     "mcpServers": {
+       "canvas": {
+         "command": "node",
+         "args": ["/path/to/canvas-mcp/dist/stdio.js"],
+         "env": {
+           "CANVAS_BASE_URL": "https://yourschool.instructure.com",
+           "CANVAS_TOKEN": "paste-your-token-here",
+           "TIME_ZONE": "America/New_York"
+         }
+       }
+     }
+   }
+   ```
+
+   If the file already has an `mcpServers` block, add `"canvas": { ... }` inside it. If Claude Desktop says it can't start the server, replace `"node"` with the full path from `which node` (apps don't always see your shell's PATH, especially with nvm or Homebrew).
+
+   **Claude Code:**
+
+   ```bash
+   claude mcp add --scope user \
+     --env CANVAS_BASE_URL=https://yourschool.instructure.com \
+     --env CANVAS_TOKEN=paste-your-token-here \
+     --transport stdio canvas -- node /path/to/canvas-mcp/dist/stdio.js
+   ```
+
+   Then run `/mcp` in Claude Code to check it's connected.
+
+   Rather not keep the token in Claude's config? Put `CANVAS_BASE_URL`, `CANVAS_TOKEN` and `TIME_ZONE` in a `.env` file in the repo folder instead (see `.env.example`; you only need those lines) and leave out `env` / `--env`.
+
+4. **Try it:** ask Claude "what's due this week?"
+
+To update: `git pull && npm ci && npm run build`, then restart Claude Desktop (or start a new Claude Code session). When your token expires, make a new one and replace it in the config.
+
 ## Deploy (on the server Mac)
+
+The full setup, for using the connector from claude.ai anywhere.
+
 
 **Follow [docs/deploy-checklist.md](docs/deploy-checklist.md).** It's the step-by-step list, from preparing the Mac to the first real use in claude.ai.
 

@@ -16,3 +16,4 @@ Important decisions for canvas-mcp, one record per file. Read the relevant ADR b
 | [10](0010-read-course-files.md) | Read course files: pdfjs-dist, downloads limited to Canvas, size caps | Accepted |
 | [11](0011-canvas-side-effects-of-reads.md) | Canvas's own bookkeeping on GET requests | Accepted |
 | [12](0012-filevault-on-owner-apple-id.md) | FileVault on, no automatic login; `devserver` signs in to the owner's Apple ID | Accepted |
+| [13](0013-local-stdio-mode.md) | Add a local (stdio) mode alongside the server | Accepted |

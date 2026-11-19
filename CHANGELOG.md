@@ -8,6 +8,10 @@ After deploying a version that adds or changes tools, press "Refresh tools list"
 
 ## [Unreleased]
 
+### Added
+
+- Local mode: `src/stdio.ts` runs the same 18 tools over stdio for Claude Desktop and Claude Code on your own computer, with only `CANVAS_BASE_URL` and `CANVAS_TOKEN`. No server, tunnel or Microsoft sign-in. See "Run it locally" in the README ([ADR 13](docs/architecture/0013-local-stdio-mode.md)).
+
 ### Fixed
 
 - `list_messages` with `scope: "sent"` still came back empty on real Canvas, because inbox lists can leave out `last_authored_message_at`. The fallback now reads the newest 30 conversations that lack it (without marking them read) and keeps the ones the student wrote in (#15).

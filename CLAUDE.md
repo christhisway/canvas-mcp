@@ -30,8 +30,9 @@ Important decisions are recorded as ADRs in [docs/architecture/](docs/architectu
 
 ```
 src/
+  stdio.ts           local entry for Claude Desktop/Code: same tools over stdio, Canvas settings only (ADR 13); never write to stdout
   http.ts            Express entry: AS metadata (+CIMD flag), mcpAuthRouter, consent/callback routes, Bearer-guarded /mcp
-  config.ts          env loading (see .env.example)
+  config.ts          env loading (see .env.example); loadCanvasConfig() is the Canvas-only subset stdio uses
   auth/provider.ts   OAuthServerProvider: consent flow, Microsoft hop, auth codes, token issue/refresh/verify/revoke
   auth/store.ts      oauth.json persistence (clients, grants; token hashes only), DCR client cap
   auth/microsoft.ts  Microsoft authorize URL, code exchange + /me, allowlist, PKCE
@@ -50,6 +51,7 @@ src/
 deploy/ctl.sh        install/update/restart/status/logs/revoke/funnel on the server (launchd agent local.canvas-mcp)
 test/grades.test.ts  unit checks for src/grades.ts (no server); 11 checks
 test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + CIMD doc + file storage); 57 checks
+test/stdio.ts        spawns src/stdio.ts with only Canvas settings against mock Canvas; 4 checks
 test/make-pdf.ts     builds small text PDFs for the mock, so there are no binary fixtures
 test/oauth-client.ts plays Claude + the browser through the OAuth flow
 docs/architecture/   ADRs (decisions); index in README.md
@@ -172,7 +174,7 @@ Quiz details, and Word/PowerPoint in `read_file`. All read-only ([ADR 9](docs/ar
 ## Commands
 
 ```bash
-npm test                 # mock Canvas + Microsoft, end to end
+npm test                 # mock Canvas + Microsoft, end to end (HTTP and stdio)
 npm run typecheck
 npm run dev              # needs .env with PUBLIC_URL=http://localhost:8787
 deploy/ctl.sh <cmd>      # on the server only

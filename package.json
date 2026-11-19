@@ -6,9 +6,10 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/http.js",
+    "start:stdio": "node dist/stdio.js",
     "dev": "tsx watch src/http.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx test/grades.test.ts && tsx test/smoke.ts",
+    "test": "tsx test/grades.test.ts && tsx test/smoke.ts && tsx test/stdio.ts",
     "revoke-grants": "node dist/revoke-grants.js"
   },
   "license": "MIT",

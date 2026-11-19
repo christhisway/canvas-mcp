@@ -17,13 +17,18 @@ function list(name: string, fallback = ""): string[] {
     .filter(Boolean);
 }
 
-export interface Config {
+/** What the read tools need. Local (stdio) mode needs only this ([ADR 13](../docs/architecture/0013-local-stdio-mode.md)). */
+export interface CanvasConfig {
   /** e.g. https://yourschool.instructure.com — no trailing slash, no /api/v1 */
   canvasBaseUrl: string;
   /** Canvas personal access token (Account → Settings → New Access Token) */
   canvasToken: string;
   /** IANA zone used when formatting due dates */
   timeZone: string;
+}
+
+/** The HTTP server's full configuration: Canvas, plus where it's published and who may sign in. */
+export interface Config extends CanvasConfig {
   host: string;
   port: number;
   /** Public origin Claude reaches this server at, e.g. https://canvas.example.com. Also the OAuth issuer. */
@@ -45,6 +50,14 @@ export interface Config {
   dataDir: string;
 }
 
+export function loadCanvasConfig(): CanvasConfig {
+  return {
+    canvasBaseUrl: required("CANVAS_BASE_URL").replace(/\/+$/, "").replace(/\/api\/v1$/, ""),
+    canvasToken: required("CANVAS_TOKEN"),
+    timeZone: optional("TIME_ZONE", "America/New_York"),
+  };
+}
+
 export function loadConfig(): Config {
   const publicUrl = new URL(required("PUBLIC_URL"));
   const loopback = ["localhost", "127.0.0.1"].includes(publicUrl.hostname);
@@ -57,9 +70,7 @@ export function loadConfig(): Config {
   if (cookieSecret.length < 32) throw new Error("COOKIE_SECRET must be at least 32 characters (openssl rand -hex 32)");
 
   return {
-    canvasBaseUrl: required("CANVAS_BASE_URL").replace(/\/+$/, "").replace(/\/api\/v1$/, ""),
-    canvasToken: required("CANVAS_TOKEN"),
-    timeZone: optional("TIME_ZONE", "America/New_York"),
+    ...loadCanvasConfig(),
     host: optional("HOST", "127.0.0.1"),
     port: Number(optional("PORT", "8787")),
     publicUrl,

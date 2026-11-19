@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasClient } from "./canvas.js";
-import type { Config } from "./config.js";
+import type { CanvasConfig } from "./config.js";
 import { CourseDirectory } from "./courses.js";
 import { registerReadTools } from "./tools/read.js";
 
@@ -11,7 +11,7 @@ named by code or name instead of id. Exam dates can be calendar events, assignme
 try list_events with search (which includes assignments), then get_syllabus.`;
 
 /** Long-lived state shared by every request (the HTTP transport is stateless). */
-export function createShared(config: Config) {
+export function createShared(config: CanvasConfig) {
   const canvas = new CanvasClient(config.canvasBaseUrl, config.canvasToken);
   return { config, canvas, courses: new CourseDirectory(canvas) };
 }
