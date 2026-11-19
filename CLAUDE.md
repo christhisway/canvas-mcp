@@ -45,6 +45,7 @@ deploy/ctl.sh        install/update/restart/status/logs/revoke/funnel on the ser
 test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + ntfy + CIMD doc); 27 checks
 test/oauth-client.ts plays Claude + the browser through the OAuth flow
 docs/architecture/   ADRs (decisions); index in README.md
+docs/deploy-checklist.md  step-by-step server setup; keep it in sync with deploy/ctl.sh
 ```
 
 ## Submission approval design
@@ -99,7 +100,7 @@ Not verified (needs the server and real accounts):
 
 ## Next steps (in order)
 
-1. **On the server**, follow README "Deploy" in order:
+1. **On the server**, the owner follows [docs/deploy-checklist.md](docs/deploy-checklist.md) in order:
    - prepare the Mac and clone
    - install Tailscale, name the machine, run `deploy/ctl.sh funnel` (this sets `PUBLIC_URL`)
    - write `.env`, add the Azure redirect URI and a new secret, set up ntfy

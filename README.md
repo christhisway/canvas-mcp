@@ -46,87 +46,29 @@ Codes expire after 15 minutes and are single-use, and three wrong guesses cancel
 
 ## Deploy (on the server Mac)
 
-Do these steps on the Mac that will run the server, not on your dev machine.
+**Follow [docs/deploy-checklist.md](docs/deploy-checklist.md).** It's the step-by-step list, from preparing the Mac to the first real submission. In outline:
 
-### 1. Prepare the Mac
+1. **Keep the Mac awake and logged in.** Set `pmset`, turn on automatic login (launchd agents only run while you're logged in), and turn on Remote Login for SSH.
+2. **Install tools:** `brew install node git gh tailscale`, then sign in to GitHub.
+3. **Tailscale.** Run `sudo brew services start tailscale` and `sudo tailscale up`. In the admin console, give the machine a permanent name and **disable key expiry**.
+4. **Clone the repo, then run `deploy/ctl.sh funnel`.** It turns on Funnel and prints `PUBLIC_URL`, the Azure redirect URI and the connector URL. claude.ai calls the connector from Anthropic's servers, so it needs this public HTTPS address. HTTPS ends on the Mac; Tailscale only relays the traffic.
+5. **Gather the secrets.**
+   - Azure: add `<PUBLIC_URL>/callback` to the To Do app registration and create a separate client secret.
+   - Canvas: create a personal access token.
+   - ntfy: subscribe your phone to a long random topic.
+6. **Fill in `.env`,** then run `deploy/ctl.sh install`. It builds the server, writes a launchd agent with this Mac's paths, and starts it.
+7. **Add `<PUBLIC_URL>/mcp`** as a custom connector in claude.ai and sign in with Microsoft.
 
-- Install Node 22 and git (`brew install node@22 git`), then sign in to GitHub (`gh auth login`) so you can clone the private repo.
-- Keep it awake: `sudo pmset -a sleep 0 disksleep 0 autorestart 1`. To run with the lid closed and no external display, also run `sudo pmset -a disablesleep 1`.
-- The server runs as a launchd *agent*, which only runs while your user is logged in. Turn on automatic login: System Settings → Users & Groups. FileVault blocks automatic login, so with FileVault on you have to log in once after every reboot.
-
-### 2. Clone
-
-```bash
-git clone https://github.com/christhisway/canvas-mcp.git ~/development/canvas-mcp
-cd ~/development/canvas-mcp
-cp .env.example .env && chmod 600 .env
-```
-
-### 3. Publish it with Tailscale Funnel
-
-claude.ai calls the connector from Anthropic's servers, so it needs a public HTTPS address. The server only listens on `127.0.0.1:8787`. Funnel gives it a stable public address, `https://<machine>.<tailnet>.ts.net`, without opening router ports. Tailscale only relays the traffic: HTTPS ends on this Mac.
-
-1. **Install Tailscale.** Use the Homebrew daemon, which starts at boot even before you log in:
-
-   ```bash
-   brew install tailscale
-   sudo brew services start tailscale
-   sudo tailscale up --operator=$USER   # prints a sign-in link; --operator lets later commands skip sudo
-   ```
-
-   If a later `tailscale` command still says access denied, run that command with `sudo`. The Tailscale app from tailscale.com also works, but it only runs after you log in.
-2. **Name the machine now**, because the name becomes part of the URL. Rename it in the [admin console](https://login.tailscale.com/admin/machines) (for example `home-server`). Changing it later means updating `PUBLIC_URL`, the Azure redirect URI and the connector.
-3. **Turn on Funnel:** run `deploy/ctl.sh funnel`.
-   - The first time, Tailscale may print a link to enable HTTPS certificates and Funnel for your tailnet. Open the link, approve, and run the command again.
-   - It then prints the three values you need: `PUBLIC_URL`, the Azure redirect URI, and the connector URL.
-   - Funnel stays on across reboots.
-
-A new Funnel hostname can take a few minutes before it resolves publicly.
-
-### 4. Configure
-
-Fill in `.env`:
-
-- **`CANVAS_BASE_URL` / `CANVAS_TOKEN`.** Use your school's Canvas address. For the token, go to Canvas → Account → Settings → New Access Token.
-- **`PUBLIC_URL`.** The value `deploy/ctl.sh funnel` printed.
-- **`MS_CLIENT_ID` / `MS_CLIENT_SECRET`.** Reuse the To Do connector's Azure app registration. In the Azure portal → App registrations → that app:
-  - **Authentication → add a Web redirect URI:** the redirect URI `deploy/ctl.sh funnel` printed (`<PUBLIC_URL>/callback`).
-  - **Certificates & secrets → new client secret** just for this server. Copy the **Value**, and note when it expires.
-  - **API permissions:** `User.Read` (it's already there).
-- **`ALLOWED_EMAILS`.** The Microsoft account you sign in with.
-- **`COOKIE_SECRET`.** Generate it with `openssl rand -hex 32`.
-- **`NTFY_URL`.** Install the ntfy app, subscribe to a long random topic (`openssl rand -hex 16`), and use `https://ntfy.sh/<topic>`.
-- **`SUBMISSIONS_DIR`.** Optional. An iCloud Drive folder lets you add files from your phone.
-  - macOS may block a background process from reading iCloud Drive. If `list_submission_files` fails with a permission error, add the `node` binary shown by `deploy/ctl.sh plist` under System Settings → Privacy & Security → Full Disk Access.
-  - Turn off "Optimize Mac Storage" for iCloud Drive (or right-click the folder → Keep Downloaded) so the files are really on disk.
-
-### 5. Install and start
-
-```bash
-deploy/ctl.sh install
-```
-
-This runs `npm ci` and the build, writes `~/Library/LaunchAgents/local.canvas-mcp.plist` with this Mac's paths, and starts the server. It then checks `/healthz` and warns if `PUBLIC_URL` doesn't match this machine's Funnel address. Logs go to `~/Library/Logs/canvas-mcp.log`.
-
-Check it from outside your network, for example on your phone with Wi-Fi off: `<PUBLIC_URL>/healthz` should return `{"ok":true}`.
-
-Other commands:
+Day-to-day:
 
 ```
 deploy/ctl.sh update      git pull, npm ci, build, test, restart
 deploy/ctl.sh status      launchd state, health check, Funnel status
-deploy/ctl.sh logs        follow the log
+deploy/ctl.sh logs        follow the log (~/Library/Logs/canvas-mcp.log)
 deploy/ctl.sh restart | stop | start
 deploy/ctl.sh revoke      sign out every connected client
+deploy/ctl.sh funnel      (re)enable Funnel and print the URLs
 ```
-
-### 6. Connect
-
-In claude.ai, go to Settings → Connectors → Add custom connector and enter `<PUBLIC_URL>/mcp`. Then approve the consent page and sign in with Microsoft. The connector also works in the Claude mobile app and in Claude Code once it's connected.
-
-If you want a second gate, set `confirm_submission` to "ask before running" in the connector's tool permissions.
-
-With Tailscale on your laptop and phone you can also reach the server privately, for example to SSH in and run `deploy/ctl.sh update`. For SSH, turn on System Settings → General → Sharing → Remote Login on the server, then `ssh <you>@<machine>` from any device on your tailnet.
 
 ## Develop
 

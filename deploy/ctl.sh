@@ -30,7 +30,7 @@ env_value() { # env_value NAME [default] — reads .env without sourcing it
 
 node_bin() {
   local n
-  n="$(command -v node)" || die "node not found on PATH. Install Node 22 (e.g. brew install node@22)."
+  n="$(command -v node)" || die "node not found on PATH. Install it with: brew install node"
   "$n" -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>20||(a===20&&b>=12)?0:1)' \
     || die "Node $("$n" -v) is too old; need 20.12+."
   echo "$n"
