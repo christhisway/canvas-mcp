@@ -28,6 +28,8 @@ export async function startMockCanvas() {
     storageSawAuth: false,
     /** enrollment_type[] values asked of /courses/:id/users, to check the roster is never requested. */
     peopleTypesAsked: new Set<string>(),
+    /** context_codes[] of each /calendar_events request. */
+    eventRequests: [] as string[][],
   };
 
   const now = Date.now();
@@ -259,6 +261,26 @@ export async function startMockCanvas() {
     res.json(members[req.params.gid] ?? []);
   });
 
+  // list_events (GitHub #6). GEOL 101 is a past course, so its event must never be asked for.
+  const ymd = (days: number) => iso(days).slice(0, 10);
+  const events = [
+    { id: 1, title: "Midterm exam", start_at: iso(3), end_at: iso(3.0833), context_code: "course_101", location_name: "Sitterson 014", description: "<p>Covers <b>lectures 1–8</b>.</p>", html_url: "https://canvas.test/calendar?event_id=1" },
+    { id: 2, title: "Office hours", start_at: iso(1), end_at: iso(1.04), context_code: "course_202", location_name: "Caldwell 105", description: null, html_url: "https://canvas.test/calendar?event_id=2" },
+    { id: 3, title: "Final exam", start_at: iso(30), end_at: iso(30.1), context_code: "course_202", description: null, html_url: "https://canvas.test/calendar?event_id=3" },
+    { id: 4, title: "Review session", start_at: iso(-2), end_at: iso(-1.95), context_code: "course_101", description: "<p>Bring questions about the midterm exam.</p>", html_url: "https://canvas.test/calendar?event_id=4" },
+    { id: 5, title: "Field trip", start_at: iso(2), end_at: iso(2), context_code: "course_303", description: null },
+    { id: 6, title: "Advising appointment", start_at: iso(2), end_at: iso(2.02), context_code: "user_1", description: null },
+    { id: 7, title: "Reading day", start_at: `${ymd(5)}T00:00:00Z`, end_at: `${ymd(5)}T00:00:00Z`, all_day: true, all_day_date: ymd(5), context_code: "course_202", description: null },
+    { id: 8, title: "Cancelled section", start_at: iso(4), end_at: iso(4), context_code: "course_101", workflow_state: "deleted", description: null },
+  ];
+  app.get("/api/v1/calendar_events", (req, res) => {
+    const codes = ([] as string[]).concat((req.query["context_codes[]"] as string | string[]) ?? []);
+    state.eventRequests.push(codes);
+    const start = String(req.query.start_date ?? "");
+    const end = String(req.query.end_date ?? "9999");
+    res.json(events.filter((e) => codes.includes(e.context_code) && e.end_at >= start && e.start_at <= end));
+  });
+
   // The calling student's submissions in a course (no student_ids, so Canvas means "me").
   app.get("/api/v1/courses/:cid/students/submissions", (req, res) => {
     const include = ([] as string[]).concat((req.query["include[]"] as string | string[]) ?? []);
@@ -350,6 +372,7 @@ export async function startMockCanvas() {
   return {
     url: `http://127.0.0.1:${port}`,
     state,
+    events,
     close: () => {
       server.close();
       storageServer.close();

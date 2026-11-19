@@ -308,7 +308,7 @@ try {
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
       "course_people", "get_assignment", "get_feedback", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
-      "list_announcements", "list_assignments", "list_courses", "read_file", "recently_graded",
+      "list_announcements", "list_assignments", "list_courses", "list_events", "read_file", "recently_graded",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
   });
@@ -431,6 +431,30 @@ try {
     assert.equal(two.graded[2].rubric, true);
     const none = parse(await call("recently_graded", { days: 1, course: "CS 240" }));
     assert.match(none.note, /Nothing graded/);
+  });
+
+  await check("list_events: window, time zone, course names, personal events; never a past course", async () => {
+    const out = parse(await call("list_events", {}));
+    assert.deepEqual(out.events.map((e: any) => [e.title, e.course]), [
+      ["Office hours", "PHIL 230"], ["Advising appointment", "personal"], ["Midterm exam", "CS 240"], ["Reading day", "PHIL 230"],
+    ]);
+    const midterm = out.events[2];
+    const ny = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", year: "numeric",
+      hour: "numeric", minute: "2-digit", timeZoneName: "short",
+    });
+    assert.equal(midterm.start, ny.format(new Date(mock.events[0].start_at)));
+    assert.match(midterm.start, /E[SD]T$/);
+    assert.equal(midterm.location, "Sitterson 014");
+    assert.match(midterm.description, /lectures 1–8/);
+    assert.match(out.events[3].start, /\(all day\)$/);
+    assert.equal(out.events[3].end, undefined);
+    assert.ok(mock.state.eventRequests.every((codes) => !codes.includes("course_303")));
+    const exams = parse(await call("list_events", { days_ahead: 60, days_back: 7, search: "exam" }));
+    assert.deepEqual(exams.events.map((e: any) => e.title), ["Review session", "Midterm exam", "Final exam"]);
+    const phil = parse(await call("list_events", { course: "philosophy", days_ahead: 3 }));
+    assert.deepEqual(phil.events.map((e: any) => e.title), ["Office hours"]);
+    assert.deepEqual(mock.state.eventRequests.at(-1), ["course_202"]);
   });
 
   await check("get_grades computes group percentages and shows final score + missing work", async () => {

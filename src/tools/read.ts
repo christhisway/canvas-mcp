@@ -9,7 +9,7 @@ import {
 } from "../grades.js";
 import { findSyllabus } from "../syllabus.js";
 import { compact, errorResult, htmlToText, json, makeDateFormatter } from "../format.js";
-import type { Assignment, AssignmentGroup, CanvasFile, Course, CourseUser, DiscussionTopic, GradingStandard, Group, PlannerItem, Submission } from "../types.js";
+import type { Assignment, AssignmentGroup, CalendarEvent, CanvasFile, Course, CourseUser, DiscussionTopic, GradingStandard, Group, PlannerItem, Submission } from "../types.js";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
@@ -758,6 +758,68 @@ export function registerReadTools(
   );
 
   server.registerTool(
+    "list_events",
+    {
+      title: "Calendar events",
+      description:
+        "Canvas calendar events (exams, office hours, review sessions, the student's own events) in a date " +
+        "window, from all current courses or one. Many instructors only put exam dates here, so get_upcoming " +
+        "doesn't show them.",
+      inputSchema: {
+        days_ahead: z.number().int().min(0).max(365).default(14).describe("How many days forward from now"),
+        days_back: z.number().int().min(0).max(120).default(0).describe("Also include this many past days"),
+        course: courseRef.optional().describe("Leave out for all current courses (plus the student's own calendar)"),
+        search: z.string().optional().describe('Only events whose title or description contains this, e.g. "exam"'),
+      },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ days_ahead, days_back, course, search }) => {
+      const scope = course ? [await courses.resolve(course)] : await courses.active();
+      const byCode = new Map(scope.map((c) => [`course_${c.id}`, c]));
+      const codes = [...byCode.keys()];
+      if (!course) {
+        const me = await optional(canvas.get<{ id: number }>("/users/self"), undefined);
+        if (me) codes.push(`user_${me.id}`);
+      }
+      const now = Date.now();
+      const window = {
+        type: "event",
+        start_date: new Date(now - days_back * 86_400_000).toISOString(),
+        end_date: new Date(now + days_ahead * 86_400_000).toISOString(),
+      };
+      // Canvas accepts only a limited number of context codes per request (10 for most users).
+      const batches: string[][] = [];
+      for (let i = 0; i < codes.length; i += 10) batches.push(codes.slice(i, i + 10));
+      const events = (
+        await Promise.all(batches.map((b) => canvas.getAll<CalendarEvent>("/calendar_events", { ...window, context_codes: b })))
+      ).flat();
+
+      const needle = search?.trim().toLowerCase();
+      const seen = new Set<string>();
+      const rows = events
+        .filter((e) => e.workflow_state !== "deleted")
+        .filter((e) => !seen.has(String(e.id)) && seen.add(String(e.id)))
+        .map((e) => ({ e, text: htmlToText(e.description, 600) }))
+        .filter(({ e, text }) => !needle || e.title.toLowerCase().includes(needle) || (text ?? "").toLowerCase().includes(needle))
+        .sort((a, b) => (a.e.start_at ?? a.e.all_day_date ?? "").localeCompare(b.e.start_at ?? b.e.all_day_date ?? ""))
+        .map(({ e, text }) => {
+          const c = e.context_code ? byCode.get(e.context_code) : undefined;
+          const allDay = Boolean(e.all_day && e.all_day_date);
+          return compact({
+            title: e.title,
+            course: c?.course_code ?? (e.context_code?.startsWith("user_") ? "personal" : e.context_code),
+            start: allDay ? `${dayOnly(e.all_day_date!)} (all day)` : date(e.start_at),
+            end: allDay || e.end_at === e.start_at ? undefined : date(e.end_at),
+            location: [e.location_name, e.location_address].filter(Boolean).join(", ") || undefined,
+            description: text || undefined,
+            url: e.html_url,
+          });
+        });
+      return compact({ events: rows, note: rows.length ? undefined : "No calendar events in that window." });
+    }),
+  );
+
+  server.registerTool(
     "list_announcements",
     {
       title: "List announcements",
@@ -902,3 +964,9 @@ function hasAssessment(s: Submission): boolean {
 }
 
 const STAFF_ROLE: Record<string, "teacher" | "ta"> = { TeacherEnrollment: "teacher", TaEnrollment: "ta" };
+
+const dayFormat = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric", year: "numeric" });
+/** "2026-11-25" → "Wed, Nov 25, 2026"; all-day events have a date but no time zone. */
+function dayOnly(ymd: string): string {
+  return dayFormat.format(new Date(`${ymd}T12:00:00Z`));
+}

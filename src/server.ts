@@ -5,7 +5,8 @@ import { CourseDirectory } from "./courses.js";
 import { registerReadTools } from "./tools/read.js";
 
 const INSTRUCTIONS = `Read-only tools for the student's own Canvas LMS account. Dates are shown in the student's time zone.
-Use get_upcoming for "what's due" questions; courses can be named by code or name instead of id.
+Use get_upcoming for "what's due" questions, and list_events for exams and office hours, which often
+appear only on the calendar; courses can be named by code or name instead of id.
 Use read_file to read lecture slides, handouts and other course files.
 Use course_people to find a course's instructors, TAs and the student's group members.
 Use get_feedback for "where did I lose points" questions.

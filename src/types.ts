@@ -190,3 +190,19 @@ export interface Group {
   context_type?: string;
   members_count?: number;
 }
+
+export interface CalendarEvent {
+  id: number | string;
+  title: string;
+  start_at: string | null;
+  end_at: string | null;
+  all_day?: boolean;
+  /** YYYY-MM-DD, for all-day events. */
+  all_day_date?: string | null;
+  location_name?: string | null;
+  location_address?: string | null;
+  description?: string | null;
+  context_code?: string;
+  workflow_state?: string;
+  html_url?: string;
+}
