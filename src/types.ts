@@ -117,7 +117,15 @@ export interface PlannerItem {
   context_name?: string;
   context_type?: string;
   html_url?: string;
-  plannable: { title: string; due_at?: string | null; todo_date?: string | null; points_possible?: number | null; details?: string };
+  plannable: {
+    title: string;
+    due_at?: string | null;
+    todo_date?: string | null;
+    points_possible?: number | null;
+    details?: string;
+    /** Set on quizzes and graded discussions: the assignment behind them. */
+    assignment_id?: number | null;
+  };
   submissions:
     | false
     | { submitted?: boolean; graded?: boolean; missing?: boolean; late?: boolean; excused?: boolean; has_feedback?: boolean; needs_grading?: boolean };
