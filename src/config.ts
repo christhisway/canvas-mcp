@@ -77,7 +77,8 @@ export function loadConfig(): Config {
     msGraphUrl: optional("MS_GRAPH_URL", "https://graph.microsoft.com").replace(/\/+$/, ""),
     allowedEmails: list("ALLOWED_EMAILS"),
     cookieSecret,
-    cimdAllowedHosts: list("CIMD_ALLOWED_HOSTS", "claude.ai"),
+    // "none" turns CIMD off (clients then fall back to dynamic registration).
+    cimdAllowedHosts: list("CIMD_ALLOWED_HOSTS", "claude.ai").filter((h) => h !== "none"),
     dataDir: path.resolve(optional("DATA_DIR", path.join(process.cwd(), "data"))),
     ntfyUrl: optional("NTFY_URL"),
     ntfyToken: optional("NTFY_TOKEN"),

@@ -32,10 +32,10 @@ app.get("/", (_req: Request, res: Response) => {
 });
 
 // Same metadata the SDK router serves, plus the Client ID Metadata Document flag (the SDK doesn't
-// set it). Registered first so it wins.
+// set it). Registered first so it wins. Without the flag, clients use dynamic registration instead.
 const asMetadata = {
   ...createOAuthMetadata({ provider, issuerUrl: config.publicUrl }),
-  client_id_metadata_document_supported: true,
+  ...(config.cimdAllowedHosts.length ? { client_id_metadata_document_supported: true } : {}),
 };
 app.get("/.well-known/oauth-authorization-server", (_req: Request, res: Response) => {
   res.set("Access-Control-Allow-Origin", "*").json(asMetadata);
