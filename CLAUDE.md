@@ -54,6 +54,7 @@ test/make-pdf.ts     builds small text PDFs for the mock, so there are no binary
 test/oauth-client.ts plays Claude + the browser through the OAuth flow
 docs/architecture/   ADRs (decisions); index in README.md
 docs/deploy-checklist.md  step-by-step server setup; keep it in sync with deploy/ctl.sh
+CHANGELOG.md         per-version changes; add an entry under the next version with each user-visible change
 ```
 
 ## Read-only
@@ -133,7 +134,7 @@ Not verified (needs the server and real accounts):
   - course entries with null names
   - #1: `list_courses` with `include_past: true`
   - #3: syllabus matches from pages and module items (only Files matches have been seen so far)
-  - GitHub #24: whether `GET /courses/:id/modules` creates module progressions for students ([ADR 11](docs/architecture/0011-canvas-side-effects-of-reads.md), Proposed).
+  - GitHub #24: whether `GET /courses/:id/modules` creates module progressions for students (allowed by [ADR 11](docs/architecture/0011-canvas-side-effects-of-reads.md)).
   - GitHub #17/#25: the shape of `/courses?enrollment_state=completed` (expected to carry `enrollments[].type`), and whether account-level grading standards are readable by students (#22).
   - GitHub #15: why real Canvas returned nothing for `scope=sent`. The cause wasn't found; the fallback (inbox + archived, filtered by `last_authored_message_at`) is what makes it work, and conversations the student started that nobody answered may not be in the inbox.
   - GitHub #9 inbox: that `auto_mark_as_read=false` is honoured (check that a message read through Claude stays unread in Canvas), `context_name` on real conversations, and the `filter[]=course_<id>` course filter.
@@ -152,17 +153,15 @@ Not verified (needs the server and real accounts):
 
 ## Next steps (in order)
 
-0.3.0 (all 18 tools) is deployed as of 2026-11-19: the server runs Node v26, and the tool list was refreshed in claude.ai. None of the new tools has been tried against real Canvas yet.
+0.3.0 (all 18 tools) was deployed on 2026-11-19, and its tools were tried against real Canvas in a live test that produced GitHub #12–#26. 0.4.0 fixes all of those (see `CHANGELOG.md`) but **isn't deployed yet**.
 
-1. **Try `read_file`** (GitHub #1): ask Claude to read a lecture PDF and a syllabus PDF from Files.
-2. **Try `list_courses` with `include_past: true`.** Past-term courses should show as ended.
-3. **Try the new tools** (GitHub #2–#9), checking each against the "Not verified" list above:
-   - `grade_whatif`: what's needed for a target in a few courses; compare `now.current` with Canvas's own grade.
-   - `get_feedback` on a graded assignment with a rubric, and `recently_graded` for the past week.
-   - `course_people` (TAs, a lab group), `list_events` (exams), `list_modules` ("what's next").
-   - `list_discussions` / `get_discussion` in a course with graded posts.
-   - `list_messages` / `get_message`, then confirm in Canvas that the message is still unread.
-4. **Confirm refresh works** more than an hour after connecting, if that hasn't been checked yet (look for `POST /token` in `deploy/ctl.sh logs` with no reconnect prompt).
+1. **Deploy 0.4.0** (`deploy/ctl.sh update` on the server), then press "Refresh tools list" in claude.ai: several tools have new inputs.
+2. **Retest the live-test fixes** against real Canvas, checking each against the "Not verified" list above:
+   - `get_grades` on MUSC161 and a course with drop rules: group percentages should now agree with Canvas.
+   - `get_upcoming`, then `get_assignment` with a quiz's `assignment_id`.
+   - `list_messages` with `scope: "sent"`, and with an old course code.
+   - `list_events` with `search: "final"`, `get_syllabus` on the long and link-only syllabi, `get_feedback` on the TA course.
+3. **Confirm refresh works** more than an hour after connecting, if that hasn't been checked yet (look for `POST /token` in `deploy/ctl.sh logs` with no reconnect prompt).
 
 ## Possible later additions
 
