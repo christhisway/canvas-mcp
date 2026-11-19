@@ -5,6 +5,7 @@
 #   deploy/ctl.sh update    git pull, npm ci + build, test, restart
 #   deploy/ctl.sh restart | stop | start | status | logs
 #   deploy/ctl.sh revoke    stop, revoke every OAuth grant (all clients must reconnect), start
+#   deploy/ctl.sh funnel    publish the server with Tailscale Funnel and print the PUBLIC_URL to use
 #   deploy/ctl.sh plist     print the launchd plist this machine would get (changes nothing)
 #
 # Nothing here is machine-specific until it runs: paths come from where the checkout lives and
@@ -40,7 +41,7 @@ check_env() {
   local missing=()
   for k in CANVAS_BASE_URL CANVAS_TOKEN PUBLIC_URL MS_CLIENT_ID MS_CLIENT_SECRET ALLOWED_EMAILS COOKIE_SECRET; do
     local v; v="$(env_value "$k")"
-    if [[ -z "$v" || "$v" == *replace* || "$v" == *example.com* || "$v" == *yourschool* || "$v" == you@* || "$v" == 00000000-* ]]; then missing+=("$k"); fi
+    if [[ -z "$v" || "$v" == *replace* || "$v" == *example.com* || "$v" == *yourschool* || "$v" == *your-tailnet* || "$v" == you@* || "$v" == 00000000-* ]]; then missing+=("$k"); fi
   done
   ((${#missing[@]} == 0)) || die ".env still has placeholders or blanks for: ${missing[*]}"
   [[ "$(stat -f %Lp .env)" == "600" ]] || { chmod 600 .env; echo "set .env to mode 600"; }
@@ -80,6 +81,26 @@ build() {
   npm run build
 }
 
+ts_bin() {
+  command -v tailscale 2>/dev/null \
+    || { [[ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]] && echo /Applications/Tailscale.app/Contents/MacOS/Tailscale; } \
+    || die "tailscale not found. See README → Deploy → 3."
+}
+
+funnel_url() { # https://<machine>.<tailnet>.ts.net, from this machine's Tailscale status
+  "$(ts_bin)" status --json 2>/dev/null \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const n=JSON.parse(s).Self?.DNSName;if(n)console.log("https://"+n.replace(/\.$/,""))})'
+}
+
+check_public_url() {
+  local want got; want="$(funnel_url || true)"; got="$(env_value PUBLIC_URL)"
+  [[ -z "$want" ]] && return 0
+  if [[ "$got" != "$want" ]]; then
+    echo "warning: PUBLIC_URL in .env is '$got' but this machine's Funnel address is '$want'." >&2
+    echo "         Fix .env (and the Azure redirect URI '$want/callback'), then deploy/ctl.sh restart." >&2
+  fi
+}
+
 loaded() { launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; }
 
 start() {
@@ -114,6 +135,7 @@ case "${1:-}" in
     plutil -lint "$PLIST" >/dev/null
     start
     health
+    command -v tailscale >/dev/null 2>&1 && check_public_url
     case "$(node_bin)" in
       *"/.nvm/"*|*"/.fnm/"*|*"/.volta/"*) echo "note: node comes from a version manager; re-run install after switching Node versions." ;;
     esac
@@ -131,9 +153,22 @@ case "${1:-}" in
   status)
     if loaded; then launchctl print "$DOMAIN/$LABEL" | grep -E "^\s*(state|pid|last exit code) =" || true; else echo "not loaded"; fi
     health || true
+    if command -v tailscale >/dev/null 2>&1; then tailscale funnel status 2>/dev/null | sed 's/^/funnel: /' || true; check_public_url; fi
     ;;
   logs) tail -n 100 -f "$LOG" ;;
+  funnel)
+    port="$(env_value PORT 8787)"
+    ts="$(ts_bin)"
+    "$ts" funnel --bg "$port" || die "Funnel failed. If it printed a link, open it to enable Funnel for this machine, then re-run. If it said 'access denied', run: sudo tailscale funnel --bg $port, then re-run this to print the URLs"
+    "$ts" funnel status
+    url="$(funnel_url)"
+    echo
+    echo "PUBLIC_URL=$url"
+    echo "Azure redirect URI: $url/callback"
+    echo "Connector URL:      $url/mcp"
+    check_public_url
+    ;;
   revoke) stop; node "$ROOT/dist/revoke-grants.js"; start; health ;;
   plist) render_plist ;;
-  *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

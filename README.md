@@ -2,7 +2,7 @@
 
 A personal MCP connector for Canvas LMS. Claude can read your courses, what's due, assignments, grades, announcements and syllabi, and it can submit work, but only after you approve each submission with a one-time code sent to your phone.
 
-It runs as a Node server on a Mac at home, behind an HTTPS tunnel. You connect it in claude.ai by signing in with your Microsoft account, the same way as the Microsoft To Do connector.
+It runs as a Node server on a Mac at home, published over HTTPS with Tailscale Funnel. You connect it in claude.ai by signing in with your Microsoft account, the same way as the Microsoft To Do connector.
 
 ## Tools
 
@@ -25,7 +25,7 @@ Courses can be named by code or name ("CS 240", "philosophy"), not just by numer
 ## How it works
 
 ```
-Claude ──▶ https://<tunnel>/mcp (Bearer token) ──▶ Canvas REST API (your personal access token)
+Claude ──▶ https://<machine>.<tailnet>.ts.net/mcp (Bearer token, via Tailscale Funnel) ──▶ Canvas REST API (your personal access token)
    │
    └─ connect: /authorize (consent page) ──▶ Microsoft sign-in ──▶ /callback ──▶ /token ──▶ token back to Claude
 ```
@@ -52,7 +52,7 @@ Do these steps on the Mac that will run the server, not on your dev machine.
 - Keep it awake: `sudo pmset -a sleep 0 disksleep 0 autorestart 1`. To run with the lid closed and no external display, also run `sudo pmset -a disablesleep 1`.
 - The server runs as a launchd *agent*, which only runs while your user is logged in. Turn on automatic login: System Settings → Users & Groups. FileVault blocks automatic login, so with FileVault on you have to log in once after every reboot.
 
-### 2. Clone and configure
+### 2. Clone
 
 ```bash
 git clone https://github.com/christhisway/canvas-mcp.git ~/development/canvas-mcp
@@ -60,12 +60,35 @@ cd ~/development/canvas-mcp
 cp .env.example .env && chmod 600 .env
 ```
 
+### 3. Publish it with Tailscale Funnel
+
+claude.ai calls the connector from Anthropic's servers, so it needs a public HTTPS address. The server only listens on `127.0.0.1:8787`. Funnel gives it a stable public address, `https://<machine>.<tailnet>.ts.net`, without opening router ports. Tailscale only relays the traffic: HTTPS ends on this Mac.
+
+1. **Install Tailscale.** Use the Homebrew daemon, which starts at boot even before you log in:
+
+   ```bash
+   brew install tailscale
+   sudo brew services start tailscale
+   sudo tailscale up --operator=$USER   # prints a sign-in link; --operator lets later commands skip sudo
+   ```
+
+   If a later `tailscale` command still says access denied, run that command with `sudo`. The Tailscale app from tailscale.com also works, but it only runs after you log in.
+2. **Name the machine now**, because the name becomes part of the URL. Rename it in the [admin console](https://login.tailscale.com/admin/machines) (for example `home-server`). Changing it later means updating `PUBLIC_URL`, the Azure redirect URI and the connector.
+3. **Turn on Funnel:** run `deploy/ctl.sh funnel`.
+   - The first time, Tailscale may print a link to enable HTTPS certificates and Funnel for your tailnet. Open the link, approve, and run the command again.
+   - It then prints the three values you need: `PUBLIC_URL`, the Azure redirect URI, and the connector URL.
+   - Funnel stays on across reboots.
+
+A new Funnel hostname can take a few minutes before it resolves publicly.
+
+### 4. Configure
+
 Fill in `.env`:
 
 - **`CANVAS_BASE_URL` / `CANVAS_TOKEN`.** Use your school's Canvas address. For the token, go to Canvas → Account → Settings → New Access Token.
-- **`PUBLIC_URL`.** The tunnel's https address, from step 3.
+- **`PUBLIC_URL`.** The value `deploy/ctl.sh funnel` printed.
 - **`MS_CLIENT_ID` / `MS_CLIENT_SECRET`.** Reuse the To Do connector's Azure app registration. In the Azure portal → App registrations → that app:
-  - **Authentication → add a Web redirect URI:** `<PUBLIC_URL>/callback`
+  - **Authentication → add a Web redirect URI:** the redirect URI `deploy/ctl.sh funnel` printed (`<PUBLIC_URL>/callback`).
   - **Certificates & secrets → new client secret** just for this server. Copy the **Value**, and note when it expires.
   - **API permissions:** `User.Read` (it's already there).
 - **`ALLOWED_EMAILS`.** The Microsoft account you sign in with.
@@ -75,49 +98,33 @@ Fill in `.env`:
   - macOS may block a background process from reading iCloud Drive. If `list_submission_files` fails with a permission error, add the `node` binary shown by `deploy/ctl.sh plist` under System Settings → Privacy & Security → Full Disk Access.
   - Turn off "Optimize Mac Storage" for iCloud Drive (or right-click the folder → Keep Downloaded) so the files are really on disk.
 
-### 3. Give it a public HTTPS address
-
-The server only listens on `127.0.0.1:8787`, and a tunnel publishes it. Pick one:
-
-- **Tailscale Funnel** (no domain needed):
-  1. Install Tailscale and sign in.
-  2. In the admin console, enable HTTPS and Funnel.
-  3. Run `tailscale funnel --bg 8787`.
-
-  `PUBLIC_URL` is then `https://<machine>.<tailnet>.ts.net`.
-- **Cloudflare Tunnel** (needs a domain on Cloudflare): `brew install cloudflared`, then:
-
-  ```bash
-  cloudflared tunnel login
-  cloudflared tunnel create canvas-mcp
-  cloudflared tunnel route dns canvas-mcp canvas.<your-domain>
-  ```
-
-  Point `~/.cloudflared/config.yml` at `http://127.0.0.1:8787` (see [deploy/cloudflared.example.yml](deploy/cloudflared.example.yml)) and run `cloudflared service install`.
-
-### 4. Install and start
+### 5. Install and start
 
 ```bash
 deploy/ctl.sh install
 ```
 
-This runs `npm ci` and the build, writes `~/Library/LaunchAgents/local.canvas-mcp.plist` with this Mac's paths, starts the server, and checks `/healthz`. Logs go to `~/Library/Logs/canvas-mcp.log`.
+This runs `npm ci` and the build, writes `~/Library/LaunchAgents/local.canvas-mcp.plist` with this Mac's paths, and starts the server. It then checks `/healthz` and warns if `PUBLIC_URL` doesn't match this machine's Funnel address. Logs go to `~/Library/Logs/canvas-mcp.log`.
+
+Check it from outside your network, for example on your phone with Wi-Fi off: `<PUBLIC_URL>/healthz` should return `{"ok":true}`.
 
 Other commands:
 
 ```
 deploy/ctl.sh update      git pull, npm ci, build, test, restart
-deploy/ctl.sh status      launchd state + health check
+deploy/ctl.sh status      launchd state, health check, Funnel status
 deploy/ctl.sh logs        follow the log
 deploy/ctl.sh restart | stop | start
 deploy/ctl.sh revoke      sign out every connected client
 ```
 
-### 5. Connect
+### 6. Connect
 
 In claude.ai, go to Settings → Connectors → Add custom connector and enter `<PUBLIC_URL>/mcp`. Then approve the consent page and sign in with Microsoft. The connector also works in the Claude mobile app and in Claude Code once it's connected.
 
 If you want a second gate, set `confirm_submission` to "ask before running" in the connector's tool permissions.
+
+With Tailscale on your laptop and phone you can also reach the server privately, for example to SSH in and run `deploy/ctl.sh update`. For SSH, turn on System Settings → General → Sharing → Remote Login on the server, then `ssh <you>@<machine>` from any device on your tailnet.
 
 ## Develop
 
@@ -135,4 +142,5 @@ npm run build && npm start
 - **"This Microsoft account is not allowed".** The account's email doesn't match `ALLOWED_EMAILS`. The log line `Rejected sign-in from …` shows the address it saw.
 - **AADSTS50011 (redirect URI mismatch).** `<PUBLIC_URL>/callback` is missing from the Azure app, or `PUBLIC_URL` doesn't match the tunnel address.
 - **claude.ai says the connection failed before the consent page appears.** The server couldn't fetch claude.ai's client metadata; check the log for `CIMD fetch failed`. Setting `CIMD_ALLOWED_HOSTS=none` makes claude.ai register instead.
-- **403 "Invalid Host header".** The tunnel sends a hostname other than `PUBLIC_URL`'s.
+- **403 "Invalid Host header".** The request's hostname isn't `PUBLIC_URL`'s; usually the machine was renamed in Tailscale. `deploy/ctl.sh status` warns about a mismatch.
+- **Public URL doesn't load.** Check `tailscale funnel status`. A brand-new hostname can take a few minutes to resolve.

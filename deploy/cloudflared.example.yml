@@ -1,9 +1,0 @@
-# ~/.cloudflared/config.yml on the server Mac (only if you use Cloudflare Tunnel instead of Tailscale Funnel).
-# `cloudflared tunnel create canvas-mcp` prints the tunnel id and writes the credentials file.
-tunnel: <TUNNEL-ID>
-credentials-file: /Users/<you>/.cloudflared/<TUNNEL-ID>.json
-
-ingress:
-  - hostname: canvas.<your-domain>
-    service: http://127.0.0.1:8787
-  - service: http_status:404

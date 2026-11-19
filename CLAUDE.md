@@ -22,6 +22,12 @@ Code is written on one Mac and runs on another: an older Mac, used as a home ser
   - It uses the same Azure app registration, with its own client secret and its own redirect URI.
   - Microsoft is identity only (`User.Read`); no Microsoft tokens are stored.
   - The old `/mcp/<secret>` URL auth is gone.
+- **Tailscale Funnel, not Cloudflare Tunnel** (decided 2026-11-19). The owner has no domain. Funnel gives `https://<machine>.<tailnet>.ts.net` with HTTPS ending on the Mac. The owner was told the cons:
+  - The hostname is fixed.
+  - Nothing filters traffic before it reaches the Mac.
+  - Extra connectors on this Mac would need ports 8443 or 10000 (or a reverse proxy), since each OAuth server needs the root of its hostname.
+
+  Switching later means changing `PUBLIC_URL`, the Azure redirect URI and the connector.
 - **Canvas auth is a personal access token.** Developer-key OAuth needs admin approval at the school, so it's out of scope.
 - **Every submission needs an out-of-band code** (see below).
 
@@ -44,7 +50,7 @@ src/
   tools/read.ts      list_courses, get_upcoming, list_assignments, get_assignment, get_grades, list_announcements, get_syllabus
   tools/submit.ts    list_submission_files, prepare_submission, confirm_submission, cancel_submission
   revoke-grants.ts   wipes all grants (used by deploy/ctl.sh revoke)
-deploy/ctl.sh        install/update/restart/status/logs/revoke on the server (launchd agent local.canvas-mcp)
+deploy/ctl.sh        install/update/restart/status/logs/revoke/funnel on the server (launchd agent local.canvas-mcp)
 test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + ntfy + CIMD doc); 27 checks
 test/oauth-client.ts plays Claude + the browser through the OAuth flow
 ```
@@ -80,7 +86,8 @@ Any new write tool must go through the same flow.
 - **Every token's resource is `<PUBLIC_URL>/mcp`.** Authorize or token requests naming another resource get `invalid_target`, and `requireBearerAuth` checks `expectedResource`.
 - **Flow state.** The consent POST and the Microsoft callback must carry the `__Host-canvas-auth` cookie set at `/authorize`; on plain-http localhost the cookie is just `canvas-auth`. The callback is one-shot.
 - **A running server holds the grants in memory** and rewrites `oauth.json` on every change. Stop it before editing or revoking (`deploy/ctl.sh revoke` does that).
-- **Behind the tunnel,** `trust proxy` is set to `loopback` so the SDK's rate limits see real client IPs. The Host-header check allows `PUBLIC_URL`'s hostname plus loopback.
+- **Behind Funnel,** `tailscaled` proxies from loopback. `trust proxy` is set to `loopback` so the SDK's rate limits see real client IPs. The Host-header check allows `PUBLIC_URL`'s hostname plus loopback.
+- **The Funnel hostname comes from the Tailscale machine name.** Renaming the machine changes the URL. `deploy/ctl.sh funnel`, `install` and `status` compare `PUBLIC_URL` against `tailscale status --json` and warn on a mismatch.
 
 ## Verified vs. not
 
@@ -103,13 +110,19 @@ Not verified (needs the server and real accounts):
   - assignment-group edge cases
   - course entries with null names
 - `canvas.uploadSubmissionFile` against the school's storage. It might answer 201 JSON or a 3xx; only the 3xx path is tested.
-- The tunnel, launchd, and iCloud Drive access from a LaunchAgent (it may need Full Disk Access for `node`).
+- Tailscale Funnel on the server, launchd, and iCloud Drive access from a LaunchAgent (it may need Full Disk Access for `node`).
+  - `deploy/ctl.sh funnel` was only run here against a stand-in `tailscale` script; real Funnel output formats weren't checked.
+  - Does Funnel forward the original Host header? Either way works, because loopback is allowed.
 - `deploy/ctl.sh install/update` on the server. On the dev machine only `plist` was run, plus the `.env` placeholder check.
 
 ## Next steps (in order)
 
-1. **Choose the tunnel**: Tailscale Funnel (no domain needed) or Cloudflare Tunnel (needs a domain on Cloudflare). That fixes `PUBLIC_URL`.
-2. **On the server**, prepare the Mac, clone, write `.env`, add the Azure redirect URI and a new secret, set up ntfy, then `deploy/ctl.sh install`. The README "Deploy" section has the steps.
+1. **On the server**, follow README "Deploy" in order:
+   - prepare the Mac and clone
+   - install Tailscale, name the machine, run `deploy/ctl.sh funnel` (this sets `PUBLIC_URL`)
+   - write `.env`, add the Azure redirect URI and a new secret, set up ntfy
+   - run `deploy/ctl.sh install`
+2. **Check** that `<PUBLIC_URL>/healthz` loads from outside the home network.
 3. **Connect in claude.ai**. Watch `deploy/ctl.sh logs` during the OAuth flow, then call each read tool.
 4. **Do a real submission** on a low-stakes or sandbox assignment, and confirm the upload path.
 5. **Confirm refresh works** more than an hour after connecting (look for `POST /token` in the log with no reconnect prompt).
