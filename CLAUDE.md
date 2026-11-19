@@ -43,12 +43,13 @@ src/
   format.ts          html→text, time-zone dates, compact()
   syllabus.ts        get_syllabus lookup: syllabus page, else pages/files/module items named "syllabus"
   files.ts           read_file helpers: find files (Files list, else module items), PDF text via pdfjs-dist, caps
+  modules.ts         modules with items, fetching items separately for large modules (Canvas omits them past ~50)
   grades.ts          grade_whatif math, pure: weights, drop rules (best-ratio subset), excused, letter scale, target solver
-  tools/read.ts      list_courses, course_people, get_upcoming, list_assignments, get_assignment, get_feedback, get_grades, grade_whatif, list_announcements, get_syllabus, read_file
+  tools/read.ts      all 18 read tools (see README.md's table)
   revoke-grants.ts   wipes all grants (used by deploy/ctl.sh revoke)
 deploy/ctl.sh        install/update/restart/status/logs/revoke/funnel on the server (launchd agent local.canvas-mcp)
 test/grades.test.ts  unit checks for src/grades.ts (no server); 11 checks
-test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + CIMD doc + file storage); 37 checks
+test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + CIMD doc + file storage); 44 checks
 test/make-pdf.ts     builds small text PDFs for the mock, so there are no binary fixtures
 test/oauth-client.ts plays Claude + the browser through the OAuth flow
 docs/architecture/   ADRs (decisions); index in README.md
@@ -81,9 +82,9 @@ The connector never writes to Canvas: see [ADR 9](docs/architecture/0009-read-on
 
 ## Verified vs. not
 
-**Issue numbers:** "#1–#4" below are labels for the first real-Canvas fixes, made before the repo had GitHub issues. GitHub issues #1–#9 (opened 2026-11-19) are the planned new tools, starting with #1 `read_file`.
+**Issue numbers:** "#1–#4" below are labels for the first real-Canvas fixes, made before the repo had GitHub issues. GitHub issues #1–#9 (opened 2026-11-19) were the planned new tools; all nine are built (#1 `read_file` through #9 `list_messages`).
 
-Verified (2026-11-19, mocks only; `npm test`, 11/11 unit + 37/37 smoke passing; `tsc` clean for `src` and `test`):
+Verified (2026-11-19, mocks only; `npm test`, 11/11 unit + 44/44 smoke passing; `tsc` clean for `src` and `test`):
 - Metadata and the 401 challenge.
 - DCR and CIMD sign-in through the consent page → Microsoft → callback → token.
 - Wrong PKCE verifier, missing client secret, and code reuse (which revokes the grant).
@@ -91,8 +92,13 @@ Verified (2026-11-19, mocks only; `npm test`, 11/11 unit + 37/37 smoke passing; 
 - An account not on the allowlist is turned away.
 - A forged consent POST and a replayed callback are rejected. Cancel works, and consent is remembered.
 - Foreign resource, revocation, and the 0600 store holding only hashes.
-- All 8 read tools against mock Canvas, and that every Canvas request is a GET.
+- All 18 read tools against mock Canvas, and that every Canvas request is a GET.
 - GitHub #1 `read_file`: finding a file by name or id, the module fallback when the Files tab is hidden, page-by-page PDF text with a `from_page` continuation, unsupported/locked/oversized files returning only details, refusing a redirect to plain http, and that file storage never receives the Canvas token ([ADR 10](docs/architecture/0010-read-course-files.md)).
+- GitHub #9 `list_messages` / `get_message`: mailbox scopes, course filter, previews, a thread oldest first with attachments, and that `get_message` always sends `auto_mark_as_read=false` (the mock marks the conversation read otherwise).
+- GitHub #8 `list_modules`: position order, module states, prerequisite names, completion requirements and "next", search, and a large module whose items Canvas leaves out (fetched from the paginated items endpoint).
+- GitHub #7 `list_discussions` / `get_discussion`: a graded topic the student posted in, a required-post topic whose replies are hidden, threaded replies with depth and the student as "you", an empty thread, and the 150-reply cap.
+- GitHub #6 `list_events`: the date window, New York time formatting, all-day and deleted events, personal events, search, and that past courses are never queried.
+- GitHub #5 `recently_graded`: the graded-since window across current courses, newest first, excused work, unposted grades left out, feedback hints.
 - GitHub #4 `course_people`: teachers and TAs with a custom role name, an email only where Canvas returns one, the student's groups in this course only (marked `you`), role filters, a hidden People tab, and that `/courses/:id/users` is only ever asked for teachers and TAs (never the roster).
 - GitHub #3 `get_feedback`: rubric criteria with points, rating and grader comment, submission comments with attachment links, finding an assignment by name (and listing several matches), the course-wide list of assignments with feedback, and an ungraded assignment.
 - GitHub #2 `grade_whatif`: matches Canvas's current and final score for a weighted mock course (default scale) and an unweighted one (drop-lowest where the best-ratio drop differs from the lowest percentage, an excused quiz, the course's own scale); target needed averages, an unreachable target, missing work counted as zero or not, hypotheticals by name, id and percentage. Unit checks also cover drop_highest, never_drop, weight scaling and extra-credit weights.
@@ -116,6 +122,11 @@ Not verified (needs the server and real accounts):
   - course entries with null names
   - #1: `list_courses` with `include_past: true`
   - #3: syllabus matches from pages and module items (only Files matches have been seen so far)
+  - GitHub #9 inbox: that `auto_mark_as_read=false` is honoured (check that a message read through Claude stays unread in Canvas), `context_name` on real conversations, and the `filter[]=course_<id>` course filter.
+  - GitHub #8 `list_modules`: real `state` values for students, `content_details` on quizzes and discussions, and whether Canvas really omits `items` for large modules or truncates them (both are handled).
+  - GitHub #7 discussions: whether `/discussion_topics/:id/view` returns 403 for a required-post topic before posting, and whether fetching a topic or its view changes its read state in Canvas (it shouldn't; marking read is a PUT).
+  - GitHub #6 `list_events`: real calendar shapes (all-day events, events with no end), and the context-code limit per request (batched at 10).
+  - GitHub #5 `recently_graded`: whether `graded_since` is honoured for students, and how unposted grades come back.
   - GitHub #4 `course_people`: whether real Canvas shows students instructors' emails, the shape of `/users/self/groups` (it should carry `course_id`), and whether `/groups/:id/users` is readable by group members.
   - GitHub #3 `get_feedback`: the real shape of `/courses/:id/students/submissions` for a student with no `student_ids` (expected to mean "me"), rubrics without ratings or with hidden points, and media or audio comments (only text and attachments are shown).
   - GitHub #2 `grade_whatif`: whether a student can read `/courses/:id/grading_standards` (if not, letters fall back to Canvas's default scale with a note), and whether its current score matches Canvas's in real courses (it adds a note when they differ by more than 0.01). A course with missing work is a good first check (see `CLAUDE.local.md`).
@@ -129,14 +140,17 @@ Not verified (needs the server and real accounts):
 
 1. **Deploy `read_file`** (GitHub #1). It needs Node 22.13+ on the server: check `node -v` as `devserver`; if it's older, run `brew upgrade node` from the admin account. Then `deploy/ctl.sh update` as `devserver`, and in a fresh claude.ai chat ask Claude to read a lecture PDF and a syllabus PDF from Files.
 2. **Try `list_courses` with `include_past: true`** in a fresh claude.ai chat or Claude Code session, so the tool list includes the new parameter. Past-term courses should show as ended.
-3. **Deploy and try `grade_whatif`** (GitHub #2) in a fresh claude.ai chat: ask what's needed for a target in a few real courses and compare `now.current` with Canvas's own grade.
-4. **Try `get_feedback`** (GitHub #3) after deploying: ask where points were lost on a graded assignment that has a rubric.
-5. **Try `course_people`** (GitHub #4) after deploying: ask who the TAs are in a course, and who's in a lab or project group.
-6. **Confirm refresh works** more than an hour after connecting, if that hasn't been checked yet (look for `POST /token` in `deploy/ctl.sh logs` with no reconnect prompt).
+3. **Try the new tools** (GitHub #2–#9) in a fresh claude.ai chat after `deploy/ctl.sh update`, checking each against the "Not verified" list above:
+   - `grade_whatif`: what's needed for a target in a few courses; compare `now.current` with Canvas's own grade.
+   - `get_feedback` on a graded assignment with a rubric, and `recently_graded` for the past week.
+   - `course_people` (TAs, a lab group), `list_events` (exams), `list_modules` ("what's next").
+   - `list_discussions` / `get_discussion` in a course with graded posts.
+   - `list_messages` / `get_message`, then confirm in Canvas that the message is still unread.
+4. **Confirm refresh works** more than an hour after connecting, if that hasn't been checked yet (look for `POST /token` in `deploy/ctl.sh logs` with no reconnect prompt).
 
 ## Possible later additions
 
-Tracked as GitHub issues #5–#9: recently graded, calendar events, discussions, modules, inbox. Also quiz details, and Word/PowerPoint in `read_file`. All read-only ([ADR 9](docs/architecture/0009-read-only-no-submissions.md)).
+Quiz details, and Word/PowerPoint in `read_file`. All read-only ([ADR 9](docs/architecture/0009-read-only-no-submissions.md)).
 
 ## Commands
 

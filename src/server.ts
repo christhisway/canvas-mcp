@@ -11,6 +11,8 @@ Use read_file to read lecture slides, handouts and other course files.
 Use course_people to find a course's instructors, TAs and the student's group members.
 Use get_feedback for "where did I lose points" questions.
 Use grade_whatif for "what do I need to get a B+" or "what if I get 85 on the final" questions.
+Use recently_graded for "what got graded this week", list_modules for "what's next in the course",
+list_discussions/get_discussion for discussion posts, and list_messages/get_message for the Canvas inbox.
 These tools can't submit or change anything in Canvas. To hand something in, give the student the
 assignment's url so they can submit it themselves.`;
 
@@ -23,7 +25,7 @@ export function createShared(config: Config) {
 export type Shared = ReturnType<typeof createShared>;
 
 export function buildServer(shared: Shared): McpServer {
-  const server = new McpServer({ name: "canvas", version: "0.2.0" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: "canvas", version: "0.3.0" }, { instructions: INSTRUCTIONS });
   const { canvas, courses, config } = shared;
   registerReadTools(server, { canvas, courses, timeZone: config.timeZone });
   return server;
