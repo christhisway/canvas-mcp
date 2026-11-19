@@ -13,3 +13,4 @@ Important decisions for canvas-mcp, one record per file. Read the relevant ADR b
 | [7](0007-tailscale-funnel.md) | Publish the server with Tailscale Funnel | Accepted |
 | [8](0008-dedicated-user-filevault-off.md) | Run connectors as a dedicated standard user, with FileVault off and automatic login | Accepted |
 | [9](0009-read-only-no-submissions.md) | Read-only: remove the submission feature | Accepted |
+| [10](0010-read-course-files.md) | Read course files: pdfjs-dist, downloads limited to Canvas, size caps | Accepted |

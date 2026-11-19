@@ -70,6 +70,62 @@ export class CanvasClient {
     return (await res.json()) as T;
   }
 
+  /**
+   * Downloads a file's bytes from a Canvas file URL (a file object's `url`), refusing anything bigger than
+   * `maxBytes`. The URL must be on the Canvas host. Canvas answers with a redirect to its file storage on
+   * another host, so redirects are followed by hand: the token goes only to the Canvas origin, and a
+   * redirect may only lead to https (or back to the Canvas hostname).
+   */
+  async download(fileUrl: string, maxBytes: number): Promise<{ bytes: Uint8Array; contentType: string | null }> {
+    const canvasOrigin = new URL(this.baseUrl).origin;
+    const canvasHost = new URL(this.baseUrl).hostname;
+    let url = new URL(fileUrl, this.baseUrl);
+    if (url.origin !== canvasOrigin) throw new Error(`refusing to download from ${url.host}: not the Canvas host`);
+    for (let hop = 0; hop <= 5; hop++) {
+      const res = await fetch(url, {
+        method: "GET",
+        redirect: "manual",
+        headers: url.origin === canvasOrigin ? { Authorization: `Bearer ${this.token}` } : {},
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        await res.body?.cancel();
+        if (!location) throw new Error(`download redirect without a location (${res.status})`);
+        const next = new URL(location, url);
+        if (next.protocol !== "https:" && next.hostname !== canvasHost) {
+          throw new Error(`refusing to follow a download redirect to ${next.protocol}//${next.host}`);
+        }
+        url = next;
+        continue;
+      }
+      if (!res.ok) {
+        await res.body?.cancel();
+        throw new CanvasError(`file download failed: ${res.status}`, res.status);
+      }
+      const declared = Number(res.headers.get("content-length"));
+      if (declared > maxBytes) {
+        await res.body?.cancel();
+        throw new Error(`file is ${declared} bytes, over the ${maxBytes}-byte limit`);
+      }
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for await (const chunk of res.body ?? []) {
+        total += chunk.length;
+        if (total > maxBytes) throw new Error(`file is over the ${maxBytes}-byte limit`);
+        chunks.push(chunk);
+      }
+      const bytes = new Uint8Array(total);
+      let offset = 0;
+      for (const c of chunks) {
+        bytes.set(c, offset);
+        offset += c.length;
+      }
+      return { bytes, contentType: res.headers.get("content-type") };
+    }
+    throw new Error("too many download redirects");
+  }
+
   /** Follows rel="next" links until exhausted (or MAX_PAGES). */
   async getAll<T>(path: string, query: Query = {}): Promise<T[]> {
     const out: T[] = [];
@@ -81,6 +137,16 @@ export class CanvasClient {
       next = parseNextLink(res.headers.get("link"));
     }
     return out;
+  }
+}
+
+/** Treats "you can't see this" (401/403/404) as `fallback`; anything else still fails the call. */
+export async function optional<T>(p: Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await p;
+  } catch (err) {
+    if (err instanceof CanvasError && [401, 403, 404].includes(err.status)) return fallback;
+    throw err;
   }
 }
 

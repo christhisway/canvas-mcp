@@ -102,7 +102,14 @@ export interface DiscussionTopic {
 export interface CanvasFile {
   id: number;
   display_name: string;
+  filename?: string;
   updated_at?: string | null;
+  size?: number;
+  "content-type"?: string;
+  /** Download link on the Canvas host; empty when the file is locked for the student. */
+  url?: string;
+  locked_for_user?: boolean;
+  lock_explanation?: string;
 }
 
 export interface Page {

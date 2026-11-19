@@ -53,7 +53,7 @@ You'll need:
   brew install node git tailscale
   ```
   The `devserver` user can run these but can't install or upgrade them. Upgrades always happen from this account.
-- [ ] **Check Node:** `/opt/homebrew/bin/node -v` shows v20.12 or newer.
+- [ ] **Check Node:** `/opt/homebrew/bin/node -v` shows v22.13 or newer.
   - Use plain `node`, not `node@22`. `node@22` is keg-only, so it isn't on PATH, and `deploy/ctl.sh` wouldn't find it.
 
 ## 4. Admin account: Tailscale

@@ -1,4 +1,4 @@
-import { CanvasError, type CanvasClient } from "./canvas.js";
+import { optional, type CanvasClient } from "./canvas.js";
 import { htmlToText } from "./format.js";
 import type { CanvasFile, Course, Module, Page } from "./types.js";
 
@@ -8,6 +8,7 @@ const SYLLABUS = /syllabus/i;
 export interface SyllabusMatch {
   type: string;
   name: string;
+  file_id?: number;
   url?: string;
   updated?: string | null;
 }
@@ -15,7 +16,7 @@ export interface SyllabusMatch {
 /**
  * The course's syllabus page, or, when that's empty, whatever looks like a syllabus elsewhere in the
  * course (issue #3): files, pages and module items with "syllabus" in the name. A matching page's text
- * is returned inline; files are only linked, since reading PDFs/DOCX is a separate feature.
+ * is returned inline; files come back with a file_id for read_file.
  */
 export async function findSyllabus(canvas: CanvasClient, course: Course) {
   const id = course.id;
@@ -35,7 +36,7 @@ export async function findSyllabus(canvas: CanvasClient, course: Course) {
   const pageSlugs: string[] = [];
   for (const f of files) {
     fileIds.add(f.id);
-    matches.push({ type: "file", name: f.display_name, url: canvas.webUrl(`/courses/${id}/files/${f.id}`), updated: f.updated_at });
+    matches.push({ type: "file", name: f.display_name, file_id: f.id, url: canvas.webUrl(`/courses/${id}/files/${f.id}`), updated: f.updated_at });
   }
   for (const p of pages) {
     pageSlugs.push(p.url);
@@ -49,7 +50,7 @@ export async function findSyllabus(canvas: CanvasClient, course: Course) {
       if (pageSlugs.includes(item.page_url)) continue;
       pageSlugs.push(item.page_url);
     }
-    matches.push({ type: `module item (${item.type})`, name: item.title, url: item.html_url ?? item.external_url });
+    matches.push({ type: `module item (${item.type})`, name: item.title, file_id: item.type === "File" ? item.content_id : undefined, url: item.html_url ?? item.external_url });
   }
 
   for (const slug of pageSlugs) {
@@ -71,14 +72,4 @@ export async function findSyllabus(canvas: CanvasClient, course: Course) {
       : "(no syllabus page on Canvas, and no file, page or module item named \"syllabus\")",
     matches,
   };
-}
-
-/** Treats "you can't see this" (401/403/404) as `fallback`; anything else still fails the call. */
-async function optional<T>(p: Promise<T>, fallback: T): Promise<T> {
-  try {
-    return await p;
-  } catch (err) {
-    if (err instanceof CanvasError && [401, 403, 404].includes(err.status)) return fallback;
-    throw err;
-  }
 }

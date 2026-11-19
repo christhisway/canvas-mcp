@@ -6,6 +6,7 @@ import { registerReadTools } from "./tools/read.js";
 
 const INSTRUCTIONS = `Read-only tools for the student's own Canvas LMS account. Dates are shown in the student's time zone.
 Use get_upcoming for "what's due" questions; courses can be named by code or name instead of id.
+Use read_file to read lecture slides, handouts and other course files.
 These tools can't submit or change anything in Canvas. To hand something in, give the student the
 assignment's url so they can submit it themselves.`;
 

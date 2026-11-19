@@ -3,6 +3,7 @@
 // check the server never writes.
 import express from "express";
 import type { AddressInfo } from "node:net";
+import { makePdf } from "./make-pdf.js";
 
 export const TOKEN = "test-token";
 export const MS_CLIENT_ID = "ms-client-id";
@@ -22,10 +23,64 @@ export async function startMockCanvas() {
     canvasMethods: new Set<string>(),
     unauthorized: 0,
     msTokenRequests: [] as Array<Record<string, string>>,
+    /** Requests that reached the file-storage host, and whether any carried an Authorization header. */
+    storageRequests: 0,
+    storageSawAuth: false,
   };
 
   const now = Date.now();
   const iso = (days: number) => new Date(now + days * 86_400_000).toISOString();
+
+  // Course files for read_file. Downloads go to /files/:id/download on the Canvas host, which redirects to a
+  // separate storage server (another origin), as real Canvas does.
+  type MockFile = { id: number; course_id: number; display_name: string; type: string; body?: Buffer; size?: number; locked?: boolean; redirect?: string };
+  // About 10,000 characters a page, so a 6-page PDF is too long for one read_file reply.
+  const longPage = (n: number) => [`Observer pattern part ${n}.`, ...Array(100).fill("Subjects notify observers. ".repeat(4))].join("\n");
+  const files: Record<string, MockFile> = {
+    "501": { id: 501, course_id: 101, display_name: "CS 240 Syllabus.pdf", type: "application/pdf", body: makePdf(["CS 240 Syllabus", "Grading: exams 50%"]) },
+    "502": { id: 502, course_id: 101, display_name: "Lecture 5 - Observer Pattern.pdf", type: "application/pdf", body: makePdf([1, 2, 3, 4, 5, 6].map(longPage)) },
+    "503": { id: 503, course_id: 101, display_name: "Lecture 5 notes.txt", type: "text/plain", body: Buffer.from("Remember: observers register with the subject.\n") },
+    "504": { id: 504, course_id: 101, display_name: "Lecture 6 slides.pptx", type: "application/vnd.openxmlformats-officedocument.presentationml.presentation", body: Buffer.from("PK") },
+    "505": { id: 505, course_id: 101, display_name: "Exam 1 answers.pdf", type: "application/pdf", locked: true },
+    "506": { id: 506, course_id: 101, display_name: "Lecture recording.pdf", type: "application/pdf", size: 30 * 1024 * 1024 },
+    "507": { id: 507, course_id: 101, display_name: "Sneaky.pdf", type: "application/pdf", body: makePdf(["x"]), redirect: "http://intranet.example/secret" },
+    "601": { id: 601, course_id: 303, display_name: "Rock cycle handout.pdf", type: "application/pdf", body: makePdf(["Igneous, sedimentary, metamorphic"]) },
+  };
+  const fileJson = (req: express.Request, f: MockFile) => ({
+    id: f.id,
+    display_name: f.display_name,
+    filename: f.display_name,
+    "content-type": f.type,
+    size: f.size ?? f.body?.length ?? 0,
+    updated_at: iso(-3),
+    url: f.locked ? "" : `http://${req.headers.host}/files/${f.id}/download?download_frd=1&verifier=v${f.id}`,
+    locked_for_user: f.locked || undefined,
+    lock_explanation: f.locked ? "<p>This file is locked until after the exam.</p>" : undefined,
+  });
+
+  const storage = express();
+  storage.get("/blob/:id", (req, res) => {
+    state.storageRequests++;
+    if (req.headers.authorization) state.storageSawAuth = true;
+    const f = files[req.params.id];
+    if (!f?.body) return res.status(404).end();
+    res.type(f.type).send(f.body);
+  });
+  const storageServer = await new Promise<import("node:http").Server>((resolve) => {
+    const s = storage.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  const storageUrl = `http://127.0.0.1:${(storageServer.address() as AddressInfo).port}`;
+
+  app.get("/files/:id/download", (req, res) => {
+    state.canvasMethods.add(req.method);
+    if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+      state.unauthorized++;
+      return res.status(401).end();
+    }
+    const f = files[req.params.id];
+    if (!f?.body) return res.status(404).end();
+    res.redirect(302, f.redirect ?? `${storageUrl}/blob/${f.id}`);
+  });
 
   // Auth on everything under /api/v1
   app.use("/api/v1", (req, res, next) => {
@@ -59,12 +114,20 @@ export async function startMockCanvas() {
   });
 
   // Syllabus fallback (issue #3). CS 240's syllabus page is empty; its syllabus is a module page plus a
-  // PDF. Its Pages tab is hidden (401). GEOL 101 has nothing, and its Files tab is hidden (403).
-  const needsSyllabusSearch = (req: express.Request) => req.query.search_term === "syllabus";
+  // PDF. Its Pages tab is hidden (401). GEOL 101 has no syllabus, and its Files tab is hidden (403).
   app.get("/api/v1/courses/:cid/files", (req, res) => {
     if (req.params.cid === "303") return res.status(403).json({ status: "unauthorized", errors: [{ message: "user not authorized to perform that action" }] });
-    if (req.params.cid === "101" && needsSyllabusSearch(req)) return res.json([{ id: 501, display_name: "CS 240 Syllabus.pdf", updated_at: iso(-60) }]);
-    res.json([]);
+    const term = String(req.query.search_term ?? "").toLowerCase();
+    res.json(
+      Object.values(files)
+        .filter((f) => f.course_id === Number(req.params.cid) && f.display_name.toLowerCase().includes(term))
+        .map((f) => fileJson(req, f)),
+    );
+  });
+  app.get("/api/v1/files/:id", (req, res) => {
+    const f = files[req.params.id];
+    if (!f) return res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
+    res.json(fileJson(req, f));
   });
   app.get("/api/v1/courses/:cid/pages", (req, res) => {
     if (req.params.cid === "101") return res.status(401).json({ status: "unauthorized", errors: [{ message: "user not authorized to perform that action" }] });
@@ -77,8 +140,14 @@ export async function startMockCanvas() {
     res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
   });
   app.get("/api/v1/courses/:cid/modules", (req, res) => {
-    if (req.params.cid !== "101" || !needsSyllabusSearch(req)) return res.json([]);
-    // The module's name matches, so Canvas returns all its items, matching or not.
+    // GEOL 101 hides its Files tab, but a module still links a handout (read_file's fallback).
+    if (req.params.cid === "303") {
+      return res.json([{ id: 2, name: "Week 3", items: [
+        { id: 81, title: "Rock cycle handout", type: "File", content_id: 601, html_url: "https://canvas.test/courses/303/modules/items/81" },
+      ] }]);
+    }
+    if (req.params.cid !== "101") return res.json([]);
+    // The module's name matches "syllabus", so Canvas returns all its items, matching or not.
     res.json([{ id: 1, name: "Syllabus & Start Here", items: [
       { id: 71, title: "CS 240 Syllabus.pdf", type: "File", content_id: 501, html_url: "https://canvas.test/courses/101/modules/items/71" },
       { id: 72, title: "Course Syllabus", type: "Page", page_url: "course-syllabus", html_url: "https://canvas.test/courses/101/modules/items/72" },
@@ -181,5 +250,12 @@ export async function startMockCanvas() {
     const s = app.listen(0, "127.0.0.1", () => resolve(s));
   });
   const port = (server.address() as AddressInfo).port;
-  return { url: `http://127.0.0.1:${port}`, state, close: () => server.close() };
+  return {
+    url: `http://127.0.0.1:${port}`,
+    state,
+    close: () => {
+      server.close();
+      storageServer.close();
+    },
+  };
 }

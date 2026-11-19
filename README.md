@@ -15,6 +15,7 @@ It runs as a Node server on a Mac at home, published over HTTPS with Tailscale F
 | `get_grades` | Current and final score, assignment-group weights, graded scores, missing work |
 | `list_announcements` | Recent announcements from one or all courses |
 | `get_syllabus` | Syllabus page as text; if it's empty, a page, file or module item named "syllabus" |
+| `read_file` | Text of a course file (PDF slides and handouts, plain text, code, HTML), found by name or id; long PDFs come back a few pages at a time |
 
 Courses can be named by code or name ("CS 240", "philosophy"), not just by numeric id. A course from a past term is found by name only when no current course matches.
 

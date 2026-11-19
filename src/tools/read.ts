@@ -1,10 +1,11 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { CanvasError, type CanvasClient } from "../canvas.js";
+import { CanvasError, optional, type CanvasClient } from "../canvas.js";
 import { hasEnded, type CourseDirectory } from "../courses.js";
+import { fileKind, findFiles, humanSize, MAX_FILE_BYTES, pdfText, pickFile, plainText } from "../files.js";
 import { findSyllabus } from "../syllabus.js";
 import { compact, errorResult, htmlToText, json, makeDateFormatter } from "../format.js";
-import type { Assignment, AssignmentGroup, Course, DiscussionTopic, PlannerItem, Submission } from "../types.js";
+import type { Assignment, AssignmentGroup, CanvasFile, Course, DiscussionTopic, PlannerItem, Submission } from "../types.js";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
@@ -368,14 +369,80 @@ export function registerReadTools(
       title: "Get syllabus",
       description:
         "The course's syllabus as text. If the syllabus page is empty, looks for a page, file or module item " +
-        "with \"syllabus\" in its name: a matching page's text is returned, and files come back as links in " +
-        "matches (their contents can't be read).",
+        "with \"syllabus\" in its name: a matching page's text is returned, and files come back in matches " +
+        "with a file_id to pass to read_file.",
       inputSchema: { course: courseRef },
       annotations: READ_ONLY,
     },
     wrap(async ({ course }) => {
       const c = await courses.resolve(course);
       return { course: `${c.course_code} — ${c.name}`, ...(await findSyllabus(canvas, c)) };
+    }),
+  );
+
+  server.registerTool(
+    "read_file",
+    {
+      title: "Read course file",
+      description:
+        "Returns the text of a file in a course: PDFs (lecture slides, handouts, readings), plain text, " +
+        "code and HTML. Name the file by file_id or by part of its name; if several files match, they're " +
+        "listed so you can call again with a file_id. Leave out both to list the course's files. Long PDFs " +
+        "come back in parts marked [page N]: follow the note and call again with from_page. Other formats " +
+        "(Word, PowerPoint, images) and files over 25 MB return only their details and link.",
+      inputSchema: {
+        course: courseRef,
+        file_id: z.number().int().optional().describe("Canvas file id (from a previous call or get_syllabus)"),
+        name: z.string().optional().describe('Part of the file name, e.g. "lecture 5" or "syllabus"'),
+        from_page: z.number().int().min(1).default(1).describe("PDFs: first page to read"),
+        to_page: z.number().int().min(1).optional().describe("PDFs: last page to read (default: as far as fits)"),
+      },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ course, file_id, name, from_page, to_page }) => {
+      const c = await courses.resolve(course);
+      const label = `${c.course_code} — ${c.name}`;
+      const fileInfo = (f: CanvasFile) =>
+        compact({
+          file_id: f.id,
+          name: f.display_name,
+          size: humanSize(f.size),
+          updated: date(f.updated_at),
+          url: canvas.webUrl(`/courses/${c.id}/files/${f.id}`),
+        });
+
+      let file: CanvasFile | undefined;
+      if (file_id !== undefined) {
+        file = await canvas.get<CanvasFile>(`/files/${file_id}`);
+      } else if (name?.trim()) {
+        const matches = await findFiles(canvas, c, name.trim());
+        if (matches.length === 0) {
+          return { course: label, note: `No file in this course has "${name}" in its name (that the student can see).` };
+        }
+        file = pickFile(matches, name);
+        if (!file) {
+          return { course: label, note: "Several files match; call again with one file_id.", matches: matches.map(fileInfo) };
+        }
+      } else {
+        const files = await optional(canvas.getAll<CanvasFile>(`/courses/${c.id}/files`, { sort: "updated_at", order: "desc" }), undefined);
+        if (!files) return { course: label, note: "The Files list is hidden in this course; search by name to find files linked from modules." };
+        return { course: label, files: files.slice(0, 100).map(fileInfo), more: files.length > 100 ? files.length - 100 : undefined };
+      }
+
+      const info = fileInfo(file);
+      const kind = fileKind(file);
+      if (file.locked_for_user || !file.url) {
+        return { course: label, file: info, note: file.lock_explanation ? htmlToText(file.lock_explanation, 500) : "This file is locked." };
+      }
+      if (kind === "unsupported") {
+        return { course: label, file: info, note: `Can't read ${file["content-type"] ?? "this type of file"} yet; open it with the url.` };
+      }
+      if (file.size !== undefined && file.size > MAX_FILE_BYTES) {
+        return { course: label, file: info, note: `Too big to read here (over ${humanSize(MAX_FILE_BYTES)}); open it with the url.` };
+      }
+      const { bytes } = await canvas.download(file.url, MAX_FILE_BYTES);
+      const extracted = kind === "pdf" ? await pdfText(bytes, from_page, to_page) : plainText(bytes, kind);
+      return compact({ course: label, file: info, ...extracted });
     }),
   );
 }

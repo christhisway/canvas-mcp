@@ -308,7 +308,7 @@ try {
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
       "get_assignment", "get_grades", "get_syllabus", "get_upcoming",
-      "list_announcements", "list_assignments", "list_courses",
+      "list_announcements", "list_assignments", "list_courses", "read_file",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
   });
@@ -398,9 +398,72 @@ try {
     assert.match(out.syllabus, /10% per day/);
     assert.deepEqual(out.other_matches.map((m: any) => [m.type, m.name]), [["file", "CS 240 Syllabus.pdf"]]);
     assert.match(out.other_matches[0].url, /\/courses\/101\/files\/501$/);
+    assert.equal(out.other_matches[0].file_id, 501);
     const none = parse(await call("get_syllabus", { course: "GEOL 101" }));
     assert.equal(none.source, "none");
     assert.match(none.syllabus, /no syllabus page/);
+  });
+
+  await check("read_file finds a PDF by name and returns its text by page", async () => {
+    const out = parse(await call("read_file", { course: "CS 240", name: "syllabus" }));
+    assert.equal(out.file.file_id, 501);
+    assert.equal(out.total_pages, 2);
+    assert.match(out.text, /\[page 2\]\nGrading: exams 50%/);
+    assert.equal(out.note, undefined);
+  });
+
+  await check("read_file lists several matches, then reads one by file_id", async () => {
+    const many = parse(await call("read_file", { course: "CS 240", name: "lecture 5" }));
+    assert.deepEqual(many.matches.map((m: any) => m.file_id).sort(), [502, 503]);
+    assert.equal(many.text, undefined);
+    const one = parse(await call("read_file", { course: "CS 240", file_id: 503 }));
+    assert.match(one.text, /observers register/);
+    const listed = parse(await call("read_file", { course: "CS 240" }));
+    assert.equal(listed.files.length, 7);
+  });
+
+  await check("read_file stops a long PDF at a page boundary and continues from_page", async () => {
+    const first = parse(await call("read_file", { course: "CS 240", file_id: 502 }));
+    assert.equal(first.total_pages, 6);
+    assert.ok(first.text.length <= 40_000);
+    const next = Number(first.note.match(/from_page (\d+)/)[1]);
+    assert.ok(next > 1 && next <= 6);
+    assert.equal(first.pages_returned, `1-${next - 1}`);
+    const rest = parse(await call("read_file", { course: "CS 240", file_id: 502, from_page: next }));
+    assert.equal(rest.pages_returned, `${next}-6`);
+    assert.match(rest.text, /Observer pattern part 6/);
+    assert.equal(rest.note, undefined);
+  });
+
+  await check("read_file returns only details for unsupported, locked and oversized files", async () => {
+    const before = mock.state.storageRequests;
+    const pptx = parse(await call("read_file", { course: "CS 240", file_id: 504 }));
+    assert.match(pptx.note, /Can't read/);
+    const locked = parse(await call("read_file", { course: "CS 240", file_id: 505 }));
+    assert.match(locked.note, /locked until after the exam/);
+    const big = parse(await call("read_file", { course: "CS 240", file_id: 506 }));
+    assert.match(big.note, /Too big/);
+    for (const r of [pptx, locked, big]) assert.equal(r.text, undefined);
+    assert.equal(mock.state.storageRequests, before);
+  });
+
+  await check("read_file won't follow a download redirect to a plain-http host", async () => {
+    const r: any = await call("read_file", { course: "CS 240", file_id: 507 });
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /refusing to follow a download redirect to http:\/\/intranet\.example/);
+  });
+
+  await check("read_file falls back to module files when the Files tab is hidden", async () => {
+    const out = parse(await call("read_file", { course: "GEOL 101", name: "rock cycle" }));
+    assert.equal(out.file.file_id, 601);
+    assert.match(out.text, /Igneous, sedimentary, metamorphic/);
+    const listed = parse(await call("read_file", { course: "GEOL 101" }));
+    assert.match(listed.note, /Files list is hidden/);
+  });
+
+  await check("file storage never received the Canvas token", async () => {
+    assert.ok(mock.state.storageRequests > 0);
+    assert.equal(mock.state.storageSawAuth, false);
   });
 
   await check("every Canvas request was an authenticated GET", async () => {
