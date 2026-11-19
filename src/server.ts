@@ -19,7 +19,7 @@ export function createShared(config: Config) {
 export type Shared = ReturnType<typeof createShared>;
 
 export function buildServer(shared: Shared): McpServer {
-  const server = new McpServer({ name: "canvas", version: "0.3.0" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: "canvas", version: "0.4.0" }, { instructions: INSTRUCTIONS });
   const { canvas, courses, config } = shared;
   registerReadTools(server, { canvas, courses, timeZone: config.timeZone });
   return server;

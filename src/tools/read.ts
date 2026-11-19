@@ -39,8 +39,7 @@ export function registerReadTools(
     };
   };
   const SCORES_NOTE =
-    "current_score counts graded work only, so missing work doesn't lower it; final_score counts every " +
-    "ungraded assignment as zero, including ones not due yet.";
+    "current_score counts graded work only; final_score counts all ungraded work as zero, even if not due.";
 
   const submissionSummary = (s: Submission | undefined) =>
     s &&
@@ -98,9 +97,7 @@ export function registerReadTools(
     {
       title: "List courses",
       description:
-        "Lists the student's current Canvas courses with term and grade. Courses from terms that have ended " +
-        "are left out unless include_past is true (which also lists courses whose enrollment Canvas has concluded). " +
-        SCORES_NOTE,
+        "The student's current courses with term and grade; include_past adds ended ones. " + SCORES_NOTE,
       inputSchema: {
         include_past: z
           .boolean()
@@ -131,12 +128,9 @@ export function registerReadTools(
     {
       title: "What's due",
       description:
-        "Everything on the student's Canvas planner in a date window across all courses: assignments, quizzes, " +
-        "graded discussions, planner notes, with submitted/missing/graded status. Use this for \"what's due\" questions. " +
-        "The planner only holds dated work, so assignments with no due date are listed separately in no_due_date. " +
-        "For quizzes and graded discussions, id is the quiz or topic id; pass assignment_id to get_assignment, " +
-        "get_feedback and grade_whatif. marked_done means the student ticked it in the planner but Canvas still " +
-        "marks it missing, so it isn't counted as done.",
+        "For \"what's due\": the planner across all courses in a date window, with submitted/missing/graded " +
+        "status; undated work is in no_due_date. For quizzes and discussions, pass assignment_id (not id) to " +
+        "other tools.",
       inputSchema: {
         days_ahead: z.number().int().min(0).max(120).default(7).describe("How many days forward from now"),
         days_back: z
@@ -267,8 +261,7 @@ export function registerReadTools(
     {
       title: "Get assignment",
       description:
-        "Full details for one assignment: instructions, due/lock dates, allowed submission types and file " +
-        "extensions, and the student's current submission with grader comments.",
+        "One assignment: instructions, dates, submission types, and the student's submission with comments.",
       inputSchema: {
         course: courseRef,
         assignment_id: z.number().int().describe("Assignment id"),
@@ -353,10 +346,8 @@ export function registerReadTools(
     {
       title: "Get feedback",
       description:
-        "Instructor feedback on graded work: score, each rubric criterion (points, rating, grader's comment) and " +
-        "submission comments with any attachments. Name one assignment by assignment_id or part of its name; " +
-        "leave both out to list every assignment in the course that has comments or a rubric assessment, then " +
-        "call again with an assignment_id for the details.",
+        "For \"where did I lose points\": score, rubric criteria and comments for one assignment (by id or name). " +
+        "With neither, lists the course's assignments that have feedback.",
       inputSchema: {
         course: courseRef,
         assignment_id: z.number().int().optional().describe("Assignment id"),
@@ -454,8 +445,7 @@ export function registerReadTools(
     {
       title: "Recently graded",
       description:
-        "Work graded in the last few days, across all current courses or in one, newest first, with the score " +
-        "and whether there are comments or a rubric to read (use get_feedback for those).",
+        "Work graded in the last few days, newest first, with scores and whether there's feedback to read.",
       inputSchema: {
         days: z.number().int().min(1).max(120).default(7).describe("How many days back"),
         course: courseRef.optional().describe("Leave out for all current courses"),
@@ -517,11 +507,8 @@ export function registerReadTools(
     {
       title: "Get grades",
       description:
-        "Grade breakdown for one course: overall scores, assignment groups with weights and drop rules, each " +
-        "graded assignment's score, and assignments Canvas marks missing. " +
-        SCORES_NOTE +
-        " group_score_percent also counts graded work only, after drop rules (dropped_now) and leaving out " +
-        "assignments marked excluded_from_grade, as Canvas does; check each group's missing list.",
+        "A course's grade breakdown: scores, groups with weights and drop rules, graded and missing work. " +
+        SCORES_NOTE + " group_score_percent is like current_score.",
       inputSchema: { course: courseRef },
       annotations: READ_ONLY,
     },
@@ -576,11 +563,8 @@ export function registerReadTools(
     {
       title: "Grade what-if",
       description:
-        "Projects a course grade. Give target (a letter like \"B+\" or a percentage) to get the average needed " +
-        "on the remaining ungraded work, or hypotheticals (scores for named assignments) to see the grade they'd " +
-        "give; both can be used together. Uses the course's group weights, drop rules and letter scale, and " +
-        "computes locally (nothing is changed in Canvas). " +
-        SCORES_NOTE,
+        "For \"what do I need for a B+\" (target) or \"what if I get 85 on the final\" (hypotheticals), using the " +
+        "course's weights, drop rules and letter scale.",
       inputSchema: {
         course: courseRef,
         target: z.string().optional().describe('Goal for the course: a letter ("B+") or a percentage ("87" or "87%")'),
@@ -750,8 +734,7 @@ export function registerReadTools(
     {
       title: "Course people",
       description:
-        "Who teaches a course (instructors and TAs, with email when Canvas shows it to students) and who is in " +
-        "the student's groups in that course (for group projects and lab reports). The full class roster isn't listed.",
+        "A course's instructors and TAs (with email when shown) and the student's group members. No class roster.",
       inputSchema: {
         course: courseRef,
         role: z.enum(["teacher", "ta", "group"]).optional().describe("Only this kind of person (default: all three)"),
@@ -838,10 +821,8 @@ export function registerReadTools(
     {
       title: "Calendar events",
       description:
-        "Canvas calendar events (exams, office hours, review sessions, the student's own events) in a date " +
-        "window, from all current courses or one. Many instructors only put exam dates here, so get_upcoming " +
-        "doesn't show them. Exams that are Canvas assignments or quizzes (e.g. an online \"Final\") are calendar " +
-        "assignments, not events: include_assignments adds them (on by default when search is given).",
+        "Calendar events (exams, office hours, review sessions) in a date window. Many exams are only here; " +
+        "exams that are quizzes come with include_assignments (on when searching).",
       inputSchema: {
         days_ahead: z.number().int().min(0).max(365).default(14).describe("How many days forward from now"),
         days_back: z.number().int().min(0).max(120).default(0).describe("Also include this many past days"),
@@ -932,8 +913,7 @@ export function registerReadTools(
     {
       title: "List announcements",
       description:
-        "Recent announcements, newest first, from one course or from all current courses. Across all courses " +
-        "each message is a short preview; name the course to read announcements in full.",
+        "Recent announcements, newest first; previews across courses, full text for one course.",
       inputSchema: {
         course: courseRef.optional().describe("Leave out for all current courses"),
         days: z.number().int().min(1).max(120).default(14).describe("How many days back"),
@@ -974,10 +954,8 @@ export function registerReadTools(
     {
       title: "List discussions",
       description:
-        "Discussion topics in a course (not announcements): due date and points when graded, whether the student " +
-        "has posted, whether a post is required before seeing replies, and unread/reply counts. Fields that would " +
-        "be false or empty are left out, so a topic without post_required_to_see_replies doesn't require one. " +
-        "Use get_discussion to read one.",
+        "A course's discussions: due date and points if graded, whether the student posted, reply counts. " +
+        "False or empty fields are left out.",
       inputSchema: { course: courseRef },
       annotations: READ_ONLY,
     },
@@ -1024,10 +1002,8 @@ export function registerReadTools(
     {
       title: "Get discussion",
       description:
-        "One discussion topic: the prompt as text and the replies in thread order (depth 0 = top-level post), " +
-        "with author and date, and whether the student has posted. In long threads, long replies are shortened " +
-        "first, then whole threads at the end are left out, with a note. mine_only keeps just the student's own " +
-        "posts, the replies to them and the posts they answered.",
+        "One discussion's prompt and replies in thread order (depth 0 = top level). Long threads are shortened, " +
+        "with a note; mine_only keeps the student's posts and replies around them.",
       inputSchema: {
         course: courseRef,
         topic_id: z.number().int().describe("Discussion topic id (from list_discussions)"),
@@ -1093,12 +1069,8 @@ export function registerReadTools(
     {
       title: "List modules",
       description:
-        "A course's modules in order: the student's progress in each (locked, unlocked, started, completed), " +
-        "unlock dates and prerequisites, and their items with due dates, completion requirements and whether " +
-        "they're met, plus submitted/missing on assignments, quizzes and graded discussions. next is the first " +
-        "required item still to do. Completed modules are shortened to their name and item count unless " +
-        "include_completed is true or search matches them. search narrows the listing to modules or items whose " +
-        "name contains it.",
+        "For \"what's next\": a course's modules with progress, prerequisites and items (due dates, requirements, " +
+        "submitted/missing). next is the first required item to do. Completed modules are shortened.",
       inputSchema: {
         course: courseRef,
         search: z.string().optional().describe("Only modules or items whose name contains this text"),
@@ -1202,9 +1174,8 @@ export function registerReadTools(
     {
       title: "List inbox messages",
       description:
-        "Conversations in the student's Canvas inbox (messages from instructors and TAs that may never appear " +
-        "as announcements): subject, participants, course, last message date, unread flag and a short preview. " +
-        "Use get_message to read a whole thread. Reading never marks anything as read.",
+        "Canvas inbox conversations with participants, course, date, unread flag and a preview. Never marks " +
+        "anything read.",
       inputSchema: {
         scope: z.enum(["inbox", "unread", "sent", "archived", "starred"]).default("inbox").describe("Which mailbox"),
         course: courseRef.optional().describe("Only conversations in this course"),
@@ -1264,8 +1235,7 @@ export function registerReadTools(
     {
       title: "Read inbox thread",
       description:
-        "One Canvas inbox conversation in full, oldest message first, with authors, dates and attachment links. " +
-        "Doesn't mark it as read.",
+        "One inbox conversation in full, oldest first, with attachments. Doesn't mark it read.",
       inputSchema: { conversation_id: z.number().int().describe("Conversation id (from list_messages)") },
       annotations: READ_ONLY,
     },
@@ -1311,10 +1281,8 @@ export function registerReadTools(
     {
       title: "Get syllabus",
       description:
-        "The course's syllabus as text. If the syllabus page is empty, looks for a page, file or module item " +
-        "with \"syllabus\" in its name: a matching page's text is returned, and files come back in matches " +
-        "with a file_id to pass to read_file. Files linked from the syllabus are listed in linked_files with a " +
-        "file_id. Long syllabi come back in parts: follow the note and call again with from_char.",
+        "The syllabus page as text, else a page, file or module item named \"syllabus\". Files come back with " +
+        "a file_id for read_file. Long syllabi come in parts (from_char).",
       inputSchema: {
         course: courseRef,
         from_char: z.number().int().min(0).default(0).describe("Where to start in a long syllabus (from the previous note)"),
@@ -1332,11 +1300,8 @@ export function registerReadTools(
     {
       title: "Read course file",
       description:
-        "Returns the text of a file in a course: PDFs (lecture slides, handouts, readings), plain text, " +
-        "code and HTML. Name the file by file_id or by part of its name; if several files match, they're " +
-        "listed so you can call again with a file_id. Leave out both to list the course's files. Long PDFs " +
-        "come back in parts marked [page N]: follow the note and call again with from_page. Other formats " +
-        "(Word, PowerPoint, images) and files over 25 MB return only their details and link.",
+        "Text of a course file (PDF slides and handouts, text, code, HTML) by file_id or name; with neither, " +
+        "lists files. Long PDFs come in parts (from_page). Other formats return just a link.",
       inputSchema: {
         course: courseRef,
         file_id: z.number().int().optional().describe("Canvas file id (from a previous call or get_syllabus)"),

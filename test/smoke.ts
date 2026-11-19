@@ -54,6 +54,9 @@ const parse = (r: any) => {
 };
 
 let passed = 0;
+/** Upper bound on the tools/list JSON (issue #12); raise it deliberately when a tool really needs more. */
+const TOOL_DEFS_BUDGET = 15_500;
+
 async function check(name: string, fn: () => Promise<void>) {
   try {
     await fn();
@@ -311,6 +314,11 @@ try {
       "list_announcements", "list_assignments", "list_courses", "list_discussions", "list_events", "list_messages", "list_modules", "read_file", "recently_graded",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
+    // Tool definitions go with every message in a chat, so keep them from creeping up (issue #12).
+    const size = JSON.stringify(tools).length;
+    const largest = tools.map((t) => [t.name, JSON.stringify(t).length] as const).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    console.log(`    (tool definitions: ${size} characters; largest ${largest.map(([n, l]) => `${n} ${l}`).join(", ")})`);
+    assert.ok(size <= TOOL_DEFS_BUDGET, `tool definitions are ${size} characters, over the ${TOOL_DEFS_BUDGET} budget`);
   });
 
   await check("list_courses follows pagination and leaves out ended courses", async () => {
