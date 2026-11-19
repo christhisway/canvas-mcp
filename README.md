@@ -20,6 +20,7 @@ It runs as a Node server on a Mac at home, published over HTTPS with Tailscale F
 | `list_events` | Calendar events (exams, office hours, review sessions, your own events) in a date window, optionally one course or a search |
 | `list_discussions` | Discussion topics in a course: due date and points when graded, whether you've posted, whether you must post to see replies, unread counts |
 | `get_discussion` | One discussion's prompt and its replies in thread order, with authors and dates (long threads are cut off with a note) |
+| `list_modules` | A course's modules in order with your progress, unlock dates, prerequisites and items (due dates, completion requirements), plus the next required item to do |
 | `list_announcements` | Recent announcements from one or all courses |
 | `get_syllabus` | Syllabus page as text; if it's empty, a page, file or module item named "syllabus" |
 | `read_file` | Text of a course file (PDF slides and handouts, plain text, code, HTML), found by name or id; long PDFs come back a few pages at a time |

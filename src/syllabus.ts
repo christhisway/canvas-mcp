@@ -1,6 +1,7 @@
 import { optional, type CanvasClient } from "./canvas.js";
 import { htmlToText } from "./format.js";
-import type { CanvasFile, Course, Module, Page } from "./types.js";
+import { modulesWithItems } from "./modules.js";
+import type { CanvasFile, Course, Page } from "./types.js";
 
 const MAX_CHARS = 15000;
 const SYLLABUS = /syllabus/i;
@@ -28,7 +29,7 @@ export async function findSyllabus(canvas: CanvasClient, course: Course) {
   const [files, pages, modules] = await Promise.all([
     optional(canvas.getAll<CanvasFile>(`/courses/${id}/files`, { search_term: "syllabus" }), []),
     optional(canvas.getAll<Page>(`/courses/${id}/pages`, { search_term: "syllabus" }), []),
-    optional(canvas.getAll<Module>(`/courses/${id}/modules`, { include: ["items"], search_term: "syllabus" }), []),
+    optional(modulesWithItems(canvas, id, { search_term: "syllabus" }), []),
   ]);
 
   const matches: SyllabusMatch[] = [];

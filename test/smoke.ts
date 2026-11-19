@@ -308,7 +308,7 @@ try {
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
       "course_people", "get_assignment", "get_discussion", "get_feedback", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
-      "list_announcements", "list_assignments", "list_courses", "list_discussions", "list_events", "read_file", "recently_graded",
+      "list_announcements", "list_assignments", "list_courses", "list_discussions", "list_events", "list_modules", "read_file", "recently_graded",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
   });
@@ -490,6 +490,33 @@ try {
     assert.equal(long.replies.at(-1).text, "Post 149");
     assert.match(long.note, /Showing 150 of 200 replies/);
     assert.equal(empty.posted, false);
+  });
+
+  await check("list_modules: order, progress, prerequisites, what's next, and a large module's items", async () => {
+    const out = parse(await call("list_modules", { course: "CS 240" }));
+    assert.deepEqual(out.modules.map((m: any) => [m.name, m.state]), [
+      ["Syllabus & Start Here", "completed"], ["Week 1: Creational patterns", "started"], ["Week 2: Behavioral patterns", "locked"],
+    ]);
+    assert.deepEqual(out.next, {
+      module: "Week 1: Creational patterns", title: "Factory Pattern Writeup", type: "Assignment", due: out.next.due,
+      points: 20, requirement: "submit", done: false, url: "https://canvas.test/courses/101/modules/items/76",
+    });
+    assert.match(out.next.due, /\d{4}/);
+    const [, week1, week2] = out.modules;
+    assert.deepEqual(week1.prerequisites, ["Syllabus & Start Here"]);
+    assert.deepEqual(week1.items.map((i: any) => [i.title, i.type, i.requirement, i.done]), [
+      ["Readings", "heading", undefined, undefined], ["Factory reading", "Page", "view", true],
+      ["Factory Pattern Writeup", "Assignment", "submit", false], ["Week 1 quiz", "Quiz", "score at least 8", false],
+    ]);
+    assert.equal(week2.in_order, true);
+    assert.match(week2.unlocks, /\d{4}/);
+    assert.equal(week2.items.length, 60);
+    assert.ok(mock.state.moduleItemsFetched.has("101/4"));
+    const search = parse(await call("list_modules", { course: "CS 240", search: "quiz" }));
+    assert.deepEqual(search.modules.map((m: any) => [m.name, m.items.map((i: any) => i.title)]), [["Week 1: Creational patterns", ["Week 1 quiz"]]]);
+    assert.equal(search.next.title, "Factory Pattern Writeup");
+    const none = parse(await call("list_modules", { course: "PHIL 230" }));
+    assert.match(none.note, /no modules/);
   });
 
   await check("get_grades computes group percentages and shows final score + missing work", async () => {

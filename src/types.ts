@@ -190,12 +190,36 @@ export interface ModuleItem {
   page_url?: string;
   html_url?: string;
   external_url?: string;
+  position?: number;
+  indent?: number;
+  completion_requirement?: {
+    type: "must_view" | "must_submit" | "must_contribute" | "min_score" | "must_mark_done" | string;
+    min_score?: number;
+    completed?: boolean;
+  } | null;
+  /** Present with include[]=content_details. */
+  content_details?: {
+    points_possible?: number | null;
+    due_at?: string | null;
+    unlock_at?: string | null;
+    lock_at?: string | null;
+    locked_for_user?: boolean;
+  };
 }
 
 export interface Module {
   id: number;
   name: string;
+  /** Left out by Canvas when the module has too many items (about 50+); fetch items_url instead. */
   items?: ModuleItem[];
+  position?: number;
+  unlock_at?: string | null;
+  require_sequential_progress?: boolean;
+  prerequisite_module_ids?: number[];
+  /** The student's progress: locked, unlocked, started or completed. */
+  state?: "locked" | "unlocked" | "started" | "completed" | string;
+  completed_at?: string | null;
+  items_count?: number;
 }
 
 export interface CourseUser {

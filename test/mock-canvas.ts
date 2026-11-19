@@ -30,6 +30,7 @@ export async function startMockCanvas() {
     peopleTypesAsked: new Set<string>(),
     /** context_codes[] of each /calendar_events request. */
     eventRequests: [] as string[][],
+    moduleItemsFetched: new Set<string>(),
   };
 
   const now = Date.now();
@@ -155,11 +156,32 @@ export async function startMockCanvas() {
     }
     if (req.params.cid !== "101") return res.json([]);
     // The module's name matches "syllabus", so Canvas returns all its items, matching or not.
-    res.json([{ id: 1, name: "Syllabus & Start Here", items: [
-      { id: 71, title: "CS 240 Syllabus.pdf", type: "File", content_id: 501, html_url: "https://canvas.test/courses/101/modules/items/71" },
-      { id: 72, title: "Course Syllabus", type: "Page", page_url: "course-syllabus", html_url: "https://canvas.test/courses/101/modules/items/72" },
-      { id: 73, title: "Welcome video", type: "ExternalUrl", external_url: "https://video.example/welcome" },
-    ] }]);
+    // list_modules (GitHub #8): listed out of position order, one completed, one started, and one locked
+    // module so large that Canvas leaves its items out (fetched from the items endpoint instead).
+    const details = String(req.query["include[]"] ?? "").includes("content_details");
+    res.json([
+      { id: 4, name: "Week 2: Behavioral patterns", position: 3, state: "locked", unlock_at: iso(7), prerequisite_module_ids: [3], require_sequential_progress: true, items_count: 60 },
+      { id: 1, name: "Syllabus & Start Here", position: 1, state: "completed", completed_at: iso(-20), prerequisite_module_ids: [], items_count: 3, items: [
+        { id: 71, position: 1, title: "CS 240 Syllabus.pdf", type: "File", content_id: 501, html_url: "https://canvas.test/courses/101/modules/items/71", completion_requirement: { type: "must_view", completed: true } },
+        { id: 72, position: 2, title: "Course Syllabus", type: "Page", page_url: "course-syllabus", html_url: "https://canvas.test/courses/101/modules/items/72", completion_requirement: { type: "must_view", completed: true } },
+        { id: 73, position: 3, title: "Welcome video", type: "ExternalUrl", external_url: "https://video.example/welcome" },
+      ] },
+      { id: 3, name: "Week 1: Creational patterns", position: 2, state: "started", prerequisite_module_ids: [1], items_count: 4, items: [
+        { id: 74, position: 1, title: "Readings", type: "SubHeader" },
+        { id: 75, position: 2, indent: 1, title: "Factory reading", type: "Page", page_url: "factory-reading", html_url: "https://canvas.test/courses/101/modules/items/75", completion_requirement: { type: "must_view", completed: true } },
+        { id: 76, position: 3, title: "Factory Pattern Writeup", type: "Assignment", content_id: 11, html_url: "https://canvas.test/courses/101/modules/items/76", completion_requirement: { type: "must_submit", completed: false }, content_details: details ? { points_possible: 20, due_at: iso(2) } : undefined },
+        { id: 77, position: 4, title: "Week 1 quiz", type: "Quiz", html_url: "https://canvas.test/courses/101/modules/items/77", completion_requirement: { type: "min_score", min_score: 8, completed: false }, content_details: details ? { points_possible: 10 } : undefined },
+      ] },
+    ]);
+  });
+  app.get("/api/v1/courses/:cid/modules/:mid/items", (req, res) => {
+    state.moduleItemsFetched.add(`${req.params.cid}/${req.params.mid}`);
+    if (req.params.cid !== "101" || req.params.mid !== "4") return res.json([]);
+    const base = `http://${req.headers.host}/api/v1/courses/101/modules/4/items`;
+    const all = Array.from({ length: 60 }, (_, i) => ({ id: 800 + i, position: i + 1, title: `Observer lab step ${i + 1}`, type: "Page", html_url: `https://canvas.test/courses/101/modules/items/${800 + i}`, completion_requirement: { type: "must_view", completed: false } }));
+    if (req.query.page === "2") return res.json(all.slice(50));
+    res.set("Link", `<${base}?page=2>; rel="next"`);
+    res.json(all.slice(0, 50));
   });
 
   const assignments: Record<string, any> = {

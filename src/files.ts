@@ -1,7 +1,8 @@
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { optional, type CanvasClient } from "./canvas.js";
 import { htmlToText } from "./format.js";
-import type { CanvasFile, Course, Module } from "./types.js";
+import { modulesWithItems } from "./modules.js";
+import type { CanvasFile, Course } from "./types.js";
 
 /** Largest file read_file will download. */
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -32,7 +33,7 @@ export async function findFiles(canvas: CanvasClient, course: Course, name: stri
   const needle = name.toLowerCase();
   const [listed, modules] = await Promise.all([
     optional(canvas.getAll<CanvasFile>(`/courses/${course.id}/files`, { search_term: name.length >= 2 ? name : undefined }), []),
-    optional(canvas.getAll<Module>(`/courses/${course.id}/modules`, { include: ["items"] }), []),
+    optional(modulesWithItems(canvas, course.id), []),
   ]);
   const found = new Map<number, CanvasFile>();
   for (const f of listed) if (f.display_name.toLowerCase().includes(needle)) found.set(f.id, f);

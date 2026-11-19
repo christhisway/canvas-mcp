@@ -7,9 +7,10 @@ import {
   CANVAS_DEFAULT_SCALE, currentView, finalView, gradeCourse, letterFor, parseTarget, round2, scaleFrom, solveTarget,
   toGradeGroups, type GradeGroup, type GradeItem,
 } from "../grades.js";
+import { modulesWithItems } from "../modules.js";
 import { findSyllabus } from "../syllabus.js";
 import { compact, errorResult, htmlToText, json, makeDateFormatter } from "../format.js";
-import type { Assignment, AssignmentGroup, CalendarEvent, CanvasFile, Course, CourseUser, DiscussionTopic, DiscussionView, DiscussionEntry, GradingStandard, Group, PlannerItem, Submission } from "../types.js";
+import type { Assignment, AssignmentGroup, CalendarEvent, CanvasFile, Course, CourseUser, DiscussionTopic, DiscussionView, DiscussionEntry, GradingStandard, Group, Module, ModuleItem, PlannerItem, Submission } from "../types.js";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
@@ -990,6 +991,89 @@ export function registerReadTools(
   );
 
   server.registerTool(
+    "list_modules",
+    {
+      title: "List modules",
+      description:
+        "A course's modules in order: the student's progress in each (locked, unlocked, started, completed), " +
+        "unlock dates and prerequisites, and their items with due dates, completion requirements and whether " +
+        "they're met. next is the first required item still to do. search narrows the listing to modules or " +
+        "items whose name contains it.",
+      inputSchema: {
+        course: courseRef,
+        search: z.string().optional().describe("Only modules or items whose name contains this text"),
+      },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ course, search }) => {
+      const c = await courses.resolve(course);
+      const modules = (await modulesWithItems(canvas, c.id, { include: ["content_details"] })).sort(
+        (a, b) => (a.position ?? 0) - (b.position ?? 0),
+      );
+      const names = new Map(modules.map((m) => [m.id, m.name]));
+      const sorted = (m: Module) => [...(m.items ?? [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+      const itemOut = (i: ModuleItem) =>
+        compact({
+          title: i.title,
+          type: i.type === "SubHeader" ? "heading" : i.type,
+          indent: i.indent || undefined,
+          due: date(i.content_details?.due_at),
+          points: i.content_details?.points_possible ?? undefined,
+          requirement: requirementLabel(i),
+          done: i.completion_requirement ? Boolean(i.completion_requirement.completed) : undefined,
+          locked: i.content_details?.locked_for_user || undefined,
+          url: i.html_url ?? i.external_url,
+        });
+
+      // What's next: the first unmet requirement in a module the student can work in.
+      let next: Record<string, unknown> | undefined;
+      for (const m of modules) {
+        if (m.state === "completed" || m.state === "locked") continue;
+        const item = sorted(m).find((i) => i.completion_requirement && !i.completion_requirement.completed);
+        if (item) {
+          next = { module: m.name, ...itemOut(item) };
+          break;
+        }
+      }
+
+      const needle = search?.trim().toLowerCase();
+      const shown = modules
+        .map((m) => {
+          const items = sorted(m);
+          if (!needle || m.name.toLowerCase().includes(needle)) return { m, items };
+          return { m, items: items.filter((i) => i.title.toLowerCase().includes(needle)) };
+        })
+        .filter(({ m, items }) => !needle || m.name.toLowerCase().includes(needle) || items.length > 0);
+
+      const allDone = modules.length > 0 && modules.every((m) => m.state === "completed" || !(m.items ?? []).some((i) => i.completion_requirement));
+      return compact({
+        course: `${c.course_code} — ${c.name}`,
+        next,
+        note: modules.length === 0
+          ? "This course has no modules the student can see (or the Modules page is hidden)."
+          : !next
+            ? allDone
+              ? "Every module requirement is complete."
+              : "Nothing to do in the unlocked modules; the remaining modules are locked."
+            : undefined,
+        modules: shown.map(({ m, items }) =>
+          compact({
+            id: m.id,
+            name: m.name,
+            state: m.state,
+            unlocks: m.state === "locked" ? date(m.unlock_at) : undefined,
+            prerequisites: m.prerequisite_module_ids?.length ? m.prerequisite_module_ids.map((id) => names.get(id) ?? `module ${id}`) : undefined,
+            in_order: m.require_sequential_progress || undefined,
+            completed: date(m.completed_at),
+            items: items.map(itemOut),
+          }),
+        ),
+      });
+    }),
+  );
+
+  server.registerTool(
     "get_syllabus",
     {
       title: "Get syllabus",
@@ -1103,4 +1187,14 @@ const dayFormat = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "
 /** "2026-11-25" → "Wed, Nov 25, 2026"; all-day events have a date but no time zone. */
 function dayOnly(ymd: string): string {
   return dayFormat.format(new Date(`${ymd}T12:00:00Z`));
+}
+
+function requirementLabel(i: ModuleItem): string | undefined {
+  const r = i.completion_requirement;
+  if (!r) return undefined;
+  const labels: Record<string, string> = {
+    must_view: "view", must_submit: "submit", must_contribute: "contribute", must_mark_done: "mark done",
+  };
+  if (r.type === "min_score") return `score at least ${r.min_score}`;
+  return labels[r.type] ?? r.type;
 }
