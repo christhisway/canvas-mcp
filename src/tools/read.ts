@@ -1203,10 +1203,36 @@ export function registerReadTools(
           optional(canvas.getAll<Conversation>("/conversations", { scope: "archived", filter }), []),
         ]);
         const seen = new Set<number>();
-        list = [...inbox, ...archived]
-          .filter((v) => v.last_authored_message_at && !seen.has(v.id) && seen.add(v.id))
+        const all = [...inbox, ...archived].filter((v) => !seen.has(v.id) && seen.add(v.id));
+        // Real Canvas can leave last_authored_message_at out of inbox lists even when the student wrote in a
+        // conversation (seen 2026-11-19), so check the authors of the newest conversations that lack it.
+        const unknown = me === undefined ? [] : all
+          .filter((v) => !v.last_authored_message_at)
+          .sort((a, b) => (b.last_message_at ?? "").localeCompare(a.last_message_at ?? ""));
+        const MAX_CHECKED = 30;
+        const checked = unknown.slice(0, MAX_CHECKED);
+        for (let i = 0; i < checked.length; i += 5) {
+          await Promise.all(checked.slice(i, i + 5).map(async (v) => {
+            const full = await optional(
+              canvas.get<Conversation>(`/conversations/${v.id}`, { auto_mark_as_read: false }),
+              undefined,
+            );
+            const mine = (full?.messages ?? [])
+              .filter((m) => m.author_id === me)
+              .map((m) => m.created_at)
+              .sort()
+              .at(-1);
+            if (mine) v.last_authored_message_at = mine;
+          }));
+        }
+        list = all
+          .filter((v) => v.last_authored_message_at)
           .sort((a, b) => b.last_authored_message_at!.localeCompare(a.last_authored_message_at!));
-        if (list.length) note = "Canvas's sent mailbox came back empty, so these are conversations the student has written in.";
+        const skipped = unknown.length - checked.length;
+        if (list.length || skipped > 0) {
+          note = "Canvas's sent mailbox came back empty, so these are conversations the student has written in." +
+            (skipped > 0 ? ` ${skipped} older conversations weren't checked.` : "");
+        }
       }
       const rows = list.slice(0, limit).map((v) =>
         compact({

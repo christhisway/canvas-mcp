@@ -49,7 +49,7 @@ src/
   revoke-grants.ts   wipes all grants (used by deploy/ctl.sh revoke)
 deploy/ctl.sh        install/update/restart/status/logs/revoke/funnel on the server (launchd agent local.canvas-mcp)
 test/grades.test.ts  unit checks for src/grades.ts (no server); 11 checks
-test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + CIMD doc + file storage); 56 checks
+test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + CIMD doc + file storage); 57 checks
 test/make-pdf.ts     builds small text PDFs for the mock, so there are no binary fixtures
 test/oauth-client.ts plays Claude + the browser through the OAuth flow
 docs/architecture/   ADRs (decisions); index in README.md
@@ -86,7 +86,7 @@ The connector never writes to Canvas: see [ADR 9](docs/architecture/0009-read-on
 
 **Issue numbers:** "#1–#4" below are labels for the first real-Canvas fixes, made before the repo had GitHub issues. GitHub issues #1–#9 (opened 2026-11-19) were the planned new tools; all nine are built (#1 `read_file` through #9 `list_messages`).
 
-Verified (2026-11-19, mocks only; `npm test`, 11/11 unit + 56/56 smoke passing; `tsc` clean for `src` and `test`):
+Verified (2026-11-19, mocks only; `npm test`, 11/11 unit + 57/57 smoke passing; `tsc` clean for `src` and `test`):
 - Metadata and the 401 challenge.
 - DCR and CIMD sign-in through the consent page → Microsoft → callback → token.
 - Wrong PKCE verifier, missing client secret, and code reuse (which revokes the grant).
@@ -124,6 +124,8 @@ Retested against real Canvas (2026-11-19, from a Claude Code session; details in
 - #3: empty syllabus pages fall back to a matching syllabus PDF in Files; a filled-in syllabus page still comes back as text.
 - #4: `no_due_date` lists undated, unsubmitted work and leaves out undated work that's already graded. The assignment that prompted #4 wasn't undated: it has a stale due date from a past term, so no window finds it. That's course data, not a connector bug.
 
+End-to-end run (2026-11-19, from a Claude Code session): all 18 tools answered against real Canvas, and the live server already showed 0.4.0 behaviour (#19 `assignment_id`, #23 calendar assignments, #24 module notes). Only `list_messages` `scope: "sent"` failed (empty); fixed after 0.4.0, see `CHANGELOG.md`.
+
 Not verified (needs the server and real accounts):
 - Real Microsoft sign-in with the shared Azure app, and that the owner's `/me` email matches `ALLOWED_EMAILS`.
 - claude.ai's real CIMD document parsing (`OAuthClientMetadataSchema`, `token_endpoint_auth_method: none`), and whether the fetch works from a home IP.
@@ -136,7 +138,7 @@ Not verified (needs the server and real accounts):
   - #3: syllabus matches from pages and module items (only Files matches have been seen so far)
   - GitHub #24: whether `GET /courses/:id/modules` creates module progressions for students (allowed by [ADR 11](docs/architecture/0011-canvas-side-effects-of-reads.md)).
   - GitHub #17/#25: the shape of `/courses?enrollment_state=completed` (expected to carry `enrollments[].type`), and whether account-level grading standards are readable by students (#22).
-  - GitHub #15: why real Canvas returned nothing for `scope=sent`. The cause wasn't found; the fallback (inbox + archived, filtered by `last_authored_message_at`) is what makes it work, and conversations the student started that nobody answered may not be in the inbox.
+  - GitHub #15: why real Canvas returned nothing for `scope=sent`. The cause wasn't found; the fallback (inbox + archived, filtered by `last_authored_message_at`) still came back empty in the 2026-11-19 end-to-end run, so it now also reads the newest 30 conversations lacking that field and checks message authors (not yet retested live), and conversations the student started that nobody answered may not be in the inbox.
   - GitHub #9 inbox: that `auto_mark_as_read=false` is honoured (check that a message read through Claude stays unread in Canvas), `context_name` on real conversations, and the `filter[]=course_<id>` course filter.
   - GitHub #8 `list_modules`: real `state` values for students, `content_details` on quizzes and discussions, and whether Canvas really omits `items` for large modules or truncates them (both are handled).
   - GitHub #7 discussions: whether `/discussion_topics/:id/view` returns 403 for a required-post topic before posting, and whether fetching a topic or its view changes its read state in Canvas (it shouldn't; marking read is a PUT).
@@ -153,9 +155,9 @@ Not verified (needs the server and real accounts):
 
 ## Next steps (in order)
 
-0.3.0 (all 18 tools) was deployed on 2026-11-19, and its tools were tried against real Canvas in a live test that produced GitHub #12–#26. 0.4.0 fixes all of those (see `CHANGELOG.md`) but **isn't deployed yet**.
+0.3.0 (all 18 tools) was deployed on 2026-11-19, and its tools were tried against real Canvas in a live test that produced GitHub #12–#26. 0.4.0 fixes all of those (see `CHANGELOG.md`). The 2026-11-19 end-to-end run saw 0.4.0 behaviour on the live server, so it looks deployed; the sent-mailbox fix under Unreleased isn't.
 
-1. **Deploy 0.4.0** (`deploy/ctl.sh update` on the server), then press "Refresh tools list" in claude.ai: several tools have new inputs.
+1. **Deploy the latest main** (`deploy/ctl.sh update` on the server), then press "Refresh tools list" in claude.ai, and check `list_messages` with `scope: "sent"` lists the EMES make-up thread (see `CLAUDE.local.md`).
 2. **Retest the live-test fixes** against real Canvas, checking each against the "Not verified" list above:
    - `get_grades` on MUSC161 and a course with drop rules: group percentages should now agree with Canvas.
    - `get_upcoming`, then `get_assignment` with a quiz's `assignment_id`.

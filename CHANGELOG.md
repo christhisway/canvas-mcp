@@ -6,6 +6,12 @@ Issue numbers like #13 are GitHub issues. The four labelled "issue #1–#4" unde
 
 After deploying a version that adds or changes tools, press "Refresh tools list" in the connector's options in claude.ai. Until then, claude.ai keeps the old tool list.
 
+## [Unreleased]
+
+### Fixed
+
+- `list_messages` with `scope: "sent"` still came back empty on real Canvas, because inbox lists can leave out `last_authored_message_at`. The fallback now reads the newest 30 conversations that lack it (without marking them read) and keeps the ones the student wrote in (#15).
+
 ## [0.4.0] - 2026-11-19
 
 Fixes and improvements from the first live test against real Canvas. Several tools take new inputs, so refresh the tool list after deploying.
