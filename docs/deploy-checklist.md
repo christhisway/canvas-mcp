@@ -276,7 +276,7 @@ As `devserver`, in `~/connectors/canvas-mcp`:
 
 | Task | Command |
 |---|---|
-| Deploy new code after a push | `deploy/ctl.sh update` |
+| Deploy new code after a push | `deploy/ctl.sh update`, then in claude.ai press **Refresh tools list** in the Canvas connector's options if tools were added or changed |
 | Is it up? | `deploy/ctl.sh status` |
 | Watch the log | `deploy/ctl.sh logs` |
 | Restart | `deploy/ctl.sh restart` |

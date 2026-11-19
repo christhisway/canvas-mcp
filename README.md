@@ -73,6 +73,8 @@ Day-to-day:
 
 ```
 deploy/ctl.sh update      git pull, npm ci, build, test, restart
+                          (new or changed tools: press "Refresh tools list" in the connector's
+                          options in claude.ai; a new chat alone keeps the cached list)
 deploy/ctl.sh status      launchd state, health check, Funnel status
 deploy/ctl.sh logs        follow the log (~/Library/Logs/canvas-mcp.log)
 deploy/ctl.sh restart | stop | start

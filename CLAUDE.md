@@ -78,6 +78,7 @@ The connector never writes to Canvas: see [ADR 9](docs/architecture/0009-read-on
 - **Flow state.** The consent POST and the Microsoft callback must carry the `__Host-canvas-auth` cookie set at `/authorize`; on plain-http localhost the cookie is just `canvas-auth`. The callback is one-shot.
 - **A running server holds the grants in memory** and rewrites `oauth.json` on every change. Stop it before editing or revoking (`deploy/ctl.sh revoke` does that).
 - **Behind Funnel,** `tailscaled` proxies from loopback. `trust proxy` is set to `loopback` so the SDK's rate limits see real client IPs. The Host-header check allows `PUBLIC_URL`'s hostname plus loopback.
+- **claude.ai caches the tool list.** After a deploy that adds or changes tools, a new chat (or Claude Code session) still gets the old list until the owner presses "Refresh tools list" in the connector's options in claude.ai. Seen on 2026-11-19: the server had all 18 tools but clients saw the original 7. Check this before debugging the server.
 - **The Funnel hostname comes from the Tailscale machine name.** Renaming the machine changes the URL. `deploy/ctl.sh funnel`, `install` and `status` compare `PUBLIC_URL` against `tailscale status --json` and warn on a mismatch.
 
 ## Verified vs. not
@@ -138,9 +139,11 @@ Not verified (needs the server and real accounts):
 
 ## Next steps (in order)
 
-1. **Deploy `read_file`** (GitHub #1). It needs Node 22.13+ on the server: check `node -v` as `devserver`; if it's older, run `brew upgrade node` from the admin account. Then `deploy/ctl.sh update` as `devserver`, and in a fresh claude.ai chat ask Claude to read a lecture PDF and a syllabus PDF from Files.
-2. **Try `list_courses` with `include_past: true`** in a fresh claude.ai chat or Claude Code session, so the tool list includes the new parameter. Past-term courses should show as ended.
-3. **Try the new tools** (GitHub #2–#9) in a fresh claude.ai chat after `deploy/ctl.sh update`, checking each against the "Not verified" list above:
+0.3.0 (all 18 tools) is deployed as of 2026-11-19: the server runs Node v26, and the tool list was refreshed in claude.ai. None of the new tools has been tried against real Canvas yet.
+
+1. **Try `read_file`** (GitHub #1): ask Claude to read a lecture PDF and a syllabus PDF from Files.
+2. **Try `list_courses` with `include_past: true`.** Past-term courses should show as ended.
+3. **Try the new tools** (GitHub #2–#9), checking each against the "Not verified" list above:
    - `grade_whatif`: what's needed for a target in a few courses; compare `now.current` with Canvas's own grade.
    - `get_feedback` on a graded assignment with a rubric, and `recently_graded` for the past week.
    - `course_people` (TAs, a lab group), `list_events` (exams), `list_modules` ("what's next").
