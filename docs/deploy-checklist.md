@@ -5,7 +5,7 @@ Step-by-step setup for the home-server Mac. Tick the boxes as you go; GitHub ren
 You'll use **two macOS accounts** on that Mac:
 
 - **Your admin account** for system setup (Homebrew, `pmset`, Tailscale, privacy permissions).
-- **A dedicated standard user**, called `connectors` below, that runs the connectors and logs in automatically.
+- **A dedicated standard user**, called `devserver` below, that runs the connectors and logs in automatically.
 
 [ADR 8](architecture/0008-dedicated-user-filevault-off.md) explains why: with FileVault off, the disk should hold only secrets you can revoke. Other decisions are in [docs/architecture/](architecture/README.md), and background is in the [README](../README.md).
 
@@ -19,7 +19,7 @@ You'll need:
 - [ ] **The Microsoft account you'll sign in with** when you connect Canvas in claude.ai. Its email goes in `ALLOWED_EMAILS`.
   - It doesn't have to be the account you use for To Do.
   - A personal account is safest, because a school account may be blocked from consenting to a third-party app.
-- [ ] **A new, unique password** for the `connectors` user. Automatic login stores it on disk in a recoverable form, so don't reuse it anywhere.
+- [ ] **A new, unique password** for the `devserver` user. Automatic login stores it on disk in a recoverable form, so don't reuse it anywhere.
 - [ ] **A low-stakes Canvas assignment** (or a sandbox course) for the submission test, and about an hour and a half.
 
 ## 1. Admin account: prepare the Mac
@@ -41,10 +41,10 @@ You'll need:
 
 - [ ] **Create the user.** System Settings → Users & Groups → **Add User**:
   - Type: **Standard** (not Administrator)
-  - Name: `connectors`
+  - Name: `devserver`
   - Password: the unique one from step 0
-- [ ] **Log in automatically:** System Settings → Users & Groups → **Automatically log in as** → `connectors`.
-- [ ] **Turn on SSH.** System Settings → General → Sharing → **Remote Login** on. Under "Allow access for", choose **Only these users**: `connectors` and your admin account.
+- [ ] **Log in automatically:** System Settings → Users & Groups → **Automatically log in as** → `devserver`.
+- [ ] **Turn on SSH.** System Settings → General → Sharing → **Remote Login** on. Under "Allow access for", choose **Only these users**: `devserver` and your admin account.
 
 ## 3. Admin account: install tools
 
@@ -53,18 +53,19 @@ You'll need:
   ```bash
   brew install node git tailscale
   ```
-  The `connectors` user can run these but can't install or upgrade them. Upgrades always happen from this account.
+  The `devserver` user can run these but can't install or upgrade them. Upgrades always happen from this account.
 - [ ] **Check Node:** `/opt/homebrew/bin/node -v` shows v20.12 or newer.
   - Use plain `node`, not `node@22`. `node@22` is keg-only, so it isn't on PATH, and `deploy/ctl.sh` wouldn't find it.
 
 ## 4. Admin account: Tailscale
 
-- [ ] **Start the daemon** (it then runs at every boot) and sign in. `--operator` lets the `connectors` user run `tailscale` commands without `sudo`.
+- [ ] **Start the daemon** (it then runs at every boot) and sign in. `--operator` lets the `devserver` user run `tailscale` commands without `sudo`.
   ```bash
   sudo brew services start tailscale
-  sudo tailscale up --operator=connectors
+  sudo tailscale up --operator=devserver
   ```
   Open the link it prints and sign in.
+  - To change the operator later, for example after renaming the service user, run `sudo tailscale set --operator=<user>`. Check it with `tailscale debug prefs | grep -i operator`.
 - [ ] In the [admin console](https://login.tailscale.com/admin):
   - [ ] **Machines → this Mac → ⋯ → Edit machine name.** Pick something permanent, like `home-server`, because it becomes part of the public URL.
   - [ ] **DNS:** MagicDNS is on, and **HTTPS Certificates** is enabled.
@@ -117,9 +118,9 @@ You'll need:
   - [ ] **Machines → this Mac → ⋯ → Edit ACL tags → add `tag:server`.** Tagged machines also don't have key expiry, so the server won't drop off Tailscale after 180 days.
 - [ ] **Check:** `tailscale status` shows this Mac online.
 
-## 5. `connectors` user: set up the account
+## 5. `devserver` user: set up the account
 
-Log out of the admin account and log in as `connectors`. Do every step from here on as `connectors`, unless a step says otherwise.
+Log out of the admin account and log in as `devserver`. Do every step from here on as `devserver`, unless a step says otherwise.
 
 - [ ] **Screen lock:**
   - System Settings → Lock Screen: **Turn display off when inactive** after 1–2 minutes, and **Require password** immediately.
@@ -138,7 +139,7 @@ Log out of the admin account and log in as `connectors`. Do every step from here
   ```
 - [ ] **Add the key to GitHub.** On GitHub → christhisway/canvas-mcp → Settings → Deploy keys → **Add deploy key**. Paste the public key and leave **Allow write access unticked**.
   - Or, from your laptop: `gh repo deploy-key add <file>.pub -R christhisway/canvas-mcp`
-- [ ] **Tell SSH to use that key for this repo.** The file is `/Users/connectors/.ssh/config`. It probably doesn't exist yet, and Finder hides `~/.ssh`, so add the block from Terminal. This creates the file, or appends to it if it exists:
+- [ ] **Tell SSH to use that key for this repo.** The file is `/Users/devserver/.ssh/config`. It probably doesn't exist yet, and Finder hides `~/.ssh`, so add the block from Terminal. This creates the file, or appends to it if it exists:
   ```bash
   cat >> ~/.ssh/config <<'EOF'
 
@@ -167,7 +168,7 @@ Log out of the admin account and log in as `connectors`. Do every step from here
   cp .env.example .env && chmod 600 .env
   ```
 
-## 6. `connectors` user: turn on Funnel
+## 6. `devserver` user: turn on Funnel
 
 - [ ] Run:
   ```bash
@@ -213,20 +214,20 @@ Log out of the admin account and log in as `connectors`. Do every step from here
 The default is `./submissions` inside the checkout (`~/connectors/canvas-mcp/submissions`). From your laptop, copy files in over Tailscale:
 
 ```bash
-scp report.pdf connectors@<machine>:connectors/canvas-mcp/submissions/
+scp report.pdf devserver@<machine>:connectors/canvas-mcp/submissions/
 ```
 
 - [ ] **Create the folder:** `mkdir -p ~/connectors/canvas-mcp/submissions`
 
-**Optional: add files from your phone.** This route keeps your own Apple ID off the server: a separate Apple ID on the `connectors` user sees only one folder you share with it.
+**Optional: add files from your phone.** This route keeps your own Apple ID off the server: a separate Apple ID on the `devserver` user sees only one folder you share with it.
 
 - [ ] **Create a new Apple ID** used only for this. It may ask for a phone number.
-- [ ] **On the `connectors` user, sign in to iCloud with it.**
+- [ ] **On the `devserver` user, sign in to iCloud with it.**
   - Turn on only **iCloud Drive**, with Optimize Mac Storage **off**.
   - Turn off Keychain, Photos and everything else.
 - [ ] **On your phone, share a folder with it.** In the Files app → iCloud Drive, create `Canvas Submissions`, then long-press → **Share**. Only invited people get access, with **Can make changes**. Invite the new Apple ID.
 - [ ] **On the server, accept the invite.** The folder then appears at `~/Library/Mobile Documents/com~apple~CloudDocs/Canvas Submissions`.
-  - Use that full `/Users/connectors/...` path for `SUBMISSIONS_DIR`. `.env` doesn't expand `~/`, and spaces are fine without quotes.
+  - Use that full `/Users/devserver/...` path for `SUBMISSIONS_DIR`. `.env` doesn't expand `~/`, and spaces are fine without quotes.
 
 ## 11. Fill in `.env`
 
@@ -295,11 +296,11 @@ Paste any errors or odd output into a Claude Code session in this repo. These to
 ## 16. Resilience and isolation checks
 
 - [ ] **Reboot test.** Run `sudo reboot` from the admin account. Once it's back, with no one touching it:
-  - it's logged in as `connectors` and the screen locks
+  - it's logged in as `devserver` and the screen locks
   - `<PUBLIC_URL>/healthz` works from your phone
   - the connector still answers in claude.ai
 - [ ] **Refresh test.** More than an hour after connecting, use the connector again. It should work without asking you to reconnect, and the log shows a `POST /token`.
-- [ ] **SSH from your laptop** (with Tailscale installed there): `ssh connectors@<machine>`, then `cd ~/connectors/canvas-mcp && deploy/ctl.sh status`.
+- [ ] **SSH from your laptop** (with Tailscale installed there): `ssh devserver@<machine>`, then `cd ~/connectors/canvas-mcp && deploy/ctl.sh status`.
 - [ ] **Isolation.** From the server, try `ssh <you>@<laptop>` or `curl http://<laptop>:<some open port>`. It should time out, because the server can't reach your other devices.
 
 ## 17. Reminders to set
@@ -309,7 +310,7 @@ Paste any errors or odd output into a Claude Code session in this repo. These to
 
 ## Day-to-day
 
-As `connectors`, in `~/connectors/canvas-mcp`:
+As `devserver`, in `~/connectors/canvas-mcp`:
 
 | Task | Command |
 |---|---|

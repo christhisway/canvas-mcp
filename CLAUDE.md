@@ -13,7 +13,7 @@ Code is written on one Mac and runs on another: an older Mac, used as a home ser
 - `.env` exists only on the server and is never committed.
 - Steps that need the server, a browser, the Azure portal or a phone are the owner's to do. Tell them exactly what to run or click.
 - **Two accounts on the server** ([ADR 8](docs/architecture/0008-dedicated-user-filevault-off.md)):
-  - A dedicated **standard** user, `connectors`, runs the server and logs in automatically. The checkout is at `~/connectors/canvas-mcp`, cloned with a read-only deploy key.
+  - A dedicated **standard** user, `devserver`, runs the server and logs in automatically. The checkout is at `~/connectors/canvas-mcp`, cloned with a read-only deploy key.
   - The admin account does everything needing `sudo` or Homebrew, including `brew upgrade node`.
   - Don't write steps that assume the service user can `sudo`. `deploy/ctl.sh` warns if it's run as an admin.
 
@@ -105,8 +105,8 @@ Not verified (needs the server and real accounts):
 ## Next steps (in order)
 
 1. **On the server**, the owner follows [docs/deploy-checklist.md](docs/deploy-checklist.md) in order:
-   - admin account: Mac prep, the `connectors` user, tools, Tailscale (machine name, policy, `tag:server`)
-   - as `connectors`: a deploy key, then clone, then `deploy/ctl.sh funnel` (this sets `PUBLIC_URL`)
+   - admin account: Mac prep, the `devserver` user, tools, Tailscale (machine name, policy, `tag:server`)
+   - as `devserver`: a deploy key, then clone, then `deploy/ctl.sh funnel` (this sets `PUBLIC_URL`)
    - write `.env`, add the Azure redirect URI and a new secret, set up ntfy
    - run `deploy/ctl.sh install`
 2. **Check** that `<PUBLIC_URL>/healthz` loads from outside the home network.

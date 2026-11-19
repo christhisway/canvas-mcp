@@ -48,19 +48,19 @@ Codes expire after 15 minutes and are single-use, and three wrong guesses cancel
 
 **Follow [docs/deploy-checklist.md](docs/deploy-checklist.md).** It's the step-by-step list, from preparing the Mac to the first real submission.
 
-The server runs as a dedicated **standard** macOS user (`connectors`) that logs in automatically. Your admin account does the system setup. FileVault is off so automatic login works, which is why the disk holds only secrets you can revoke ([ADR 8](docs/architecture/0008-dedicated-user-filevault-off.md)). In outline:
+The server runs as a dedicated **standard** macOS user (`devserver`) that logs in automatically. Your admin account does the system setup. FileVault is off so automatic login works, which is why the disk holds only secrets you can revoke ([ADR 8](docs/architecture/0008-dedicated-user-filevault-off.md)). In outline:
 
 1. **Admin account:**
    - run `pmset` so the Mac stays awake
-   - create the `connectors` user and set it to log in automatically
+   - create the `devserver` user and set it to log in automatically
    - turn on Remote Login for SSH
    - `brew install node git tailscale`
 2. **Admin account, Tailscale:**
-   - start the daemon with `--operator=connectors`
+   - start the daemon with `--operator=devserver`
    - name the machine
    - add the policy that limits the server to inbound SSH and allows Funnel
    - tag the machine `tag:server` (tagged machines don't have key expiry)
-3. **`connectors` user:**
+3. **`devserver` user:**
    - set a quick screen lock, and put `/opt/homebrew/bin` on PATH (Homebrew's setup only did that for the admin account)
    - create a **read-only deploy key**, then clone to `~/connectors/canvas-mcp`
    - run `deploy/ctl.sh funnel`, which prints `PUBLIC_URL`, the Azure redirect URI and the connector URL. claude.ai calls the connector from Anthropic's servers, so it needs this public HTTPS address. HTTPS ends on the Mac; Tailscale only relays the traffic.
