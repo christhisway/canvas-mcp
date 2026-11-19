@@ -186,6 +186,8 @@ export async function startMockCanvas() {
       { id: "c2", description: "Evidence", points: 20, ratings: [{ id: "r4", description: "Strong", points: 20 }, { id: "r5", description: "Weak", points: 10 }] },
       { id: "c3", description: "Mechanics", points: 10, ratings: [] },
     ] },
+    // The graded discussion's assignment (GitHub #7).
+    "26": { id: 26, course_id: 202, name: "Week 5: Chinese Room", description: null, due_at: iso(2), lock_at: null, unlock_at: null, points_possible: 10, submission_types: ["discussion_topic"], html_url: "https://canvas.test/courses/202/assignments/26" },
     "14": { id: 14, course_id: 101, name: "Observer Pattern Writeup", description: null, due_at: iso(-4), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/101/assignments/14" },
   };
   const mySubs: Record<string, any> = {
@@ -195,6 +197,7 @@ export async function startMockCanvas() {
     // Past due, never handed in, not graded: invisible in the current score (issue #2).
     "14": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null, missing: true },
     "15": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
+    "26": { workflow_state: "submitted", submitted_at: iso(-1), score: null, grade: null, attempt: 1 },
     "17": { workflow_state: "graded", submitted_at: iso(-11), graded_at: iso(-9), score: 17.8, grade: "17.8", attempt: 1 },
     "21": { workflow_state: "graded", submitted_at: iso(-40), graded_at: iso(-3), score: 2, grade: "2", attempt: 1 },
     "22": { workflow_state: "graded", submitted_at: iso(-30), graded_at: iso(-29), score: 5, grade: "5", attempt: 1 },
@@ -279,6 +282,43 @@ export async function startMockCanvas() {
     const start = String(req.query.start_date ?? "");
     const end = String(req.query.end_date ?? "9999");
     res.json(events.filter((e) => codes.includes(e.context_code) && e.end_at >= start && e.start_at <= end));
+  });
+
+  // Discussions (GitHub #7) in PHIL 230: a graded topic the student has posted in, one that hides replies
+  // until the student posts, and an empty Q&A. User 1 is the student.
+  const topics: Record<string, any> = {
+    "31": { id: 31, title: "Week 5: Chinese Room", message: "<p>Does the room <em>understand</em> Chinese?</p>", posted_at: iso(-6), assignment_id: 26, require_initial_post: false, user_can_see_posts: true, discussion_subentry_count: 4, unread_count: 2, last_reply_at: iso(-1), author: { display_name: "Prof. B" }, html_url: "https://canvas.test/courses/202/discussion_topics/31" },
+    "32": { id: 32, title: "Week 6: Zombies", message: "<p>Could a zombie be conscious?</p>", posted_at: iso(-2), assignment_id: null, require_initial_post: true, user_can_see_posts: false, discussion_subentry_count: 5, unread_count: 0, last_reply_at: iso(0), author: { display_name: "Prof. B" }, html_url: "https://canvas.test/courses/202/discussion_topics/32" },
+    "34": { id: 34, title: "Introductions", message: "<p>Say hi.</p>", posted_at: iso(-60), assignment_id: null, require_initial_post: false, user_can_see_posts: true, discussion_subentry_count: 200, unread_count: 0, last_reply_at: iso(-1), html_url: "https://canvas.test/courses/202/discussion_topics/34" },
+    "33": { id: 33, title: "General Q&A", message: "<p>Ask anything.</p>", posted_at: iso(-30), assignment_id: null, require_initial_post: false, user_can_see_posts: true, discussion_subentry_count: 0, unread_count: 0, last_reply_at: null, html_url: "https://canvas.test/courses/202/discussion_topics/33" },
+  };
+  app.get("/api/v1/courses/:cid/discussion_topics", (req, res) => res.json(req.params.cid === "202" ? Object.values(topics) : []));
+  app.get("/api/v1/courses/:cid/discussion_topics/:tid", (req, res) => {
+    const t = req.params.cid === "202" ? topics[req.params.tid] : undefined;
+    if (!t) return res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
+    res.json(t);
+  });
+  app.get("/api/v1/courses/:cid/discussion_topics/:tid/view", (req, res) => {
+    if (req.params.tid === "32") return res.status(403).json({ errors: [{ message: "You must post before viewing replies" }] });
+    if (req.params.tid === "33") return res.json({ participants: [], view: [] });
+    if (req.params.tid === "34") {
+      return res.json({
+        participants: [{ id: 60, display_name: "Alex Kim" }],
+        view: Array.from({ length: 200 }, (_, i) => ({ id: 1000 + i, user_id: 60, message: `<p>Post ${i}</p>`, created_at: iso(-1) })),
+      });
+    }
+    res.json({
+      participants: [{ id: 1, display_name: "Owner Student" }, { id: 60, display_name: "Alex Kim" }, { id: 61, display_name: "Jordan Lee" }],
+      view: [
+        { id: 401, user_id: 60, message: "<p>No: syntax isn't semantics.</p>", created_at: iso(-5), replies: [
+          { id: 403, user_id: 1, message: "<p>But the <b>system</b> might understand.</p>", created_at: iso(-4), replies: [
+            { id: 404, user_id: 60, message: "<p>The systems reply! Searle answers it.</p>", created_at: iso(-3) },
+          ] },
+        ] },
+        { id: 402, user_id: 61, message: "<p>Depends on what understanding is.</p>", created_at: iso(-2) },
+        { id: 405, deleted: true, created_at: iso(-1) },
+      ],
+    });
   });
 
   // The calling student's submissions in a course (no student_ids, so Canvas means "me").

@@ -307,8 +307,8 @@ try {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
-      "course_people", "get_assignment", "get_feedback", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
-      "list_announcements", "list_assignments", "list_courses", "list_events", "read_file", "recently_graded",
+      "course_people", "get_assignment", "get_discussion", "get_feedback", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
+      "list_announcements", "list_assignments", "list_courses", "list_discussions", "list_events", "read_file", "recently_graded",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
   });
@@ -455,6 +455,41 @@ try {
     const phil = parse(await call("list_events", { course: "philosophy", days_ahead: 3 }));
     assert.deepEqual(phil.events.map((e: any) => e.title), ["Office hours"]);
     assert.deepEqual(mock.state.eventRequests.at(-1), ["course_202"]);
+  });
+
+  await check("list_discussions: graded topic with due date and posted, required-post topic not posted", async () => {
+    const out = parse(await call("list_discussions", { course: "PHIL 230" }));
+    assert.deepEqual(out.discussions.map((d: any) => [d.id, d.posted]), [[31, true], [32, false], [33, undefined], [34, undefined]]);
+    const [graded, zombies] = out.discussions;
+    assert.equal(graded.graded, true);
+    assert.equal(graded.points, 10);
+    assert.match(graded.due, /\d{4}/);
+    assert.equal(graded.unread, 2);
+    assert.equal(zombies.post_required_to_see_replies, true);
+    const none = parse(await call("list_discussions", { course: "CS 240" }));
+    assert.deepEqual(none.discussions, []);
+  });
+
+  await check("get_discussion: prompt, threaded replies with authors, posted flag, hidden replies", async () => {
+    const out = parse(await call("get_discussion", { course: "PHIL 230", topic_id: 31 }));
+    assert.match(out.prompt, /understand/);
+    assert.equal(out.posted, true);
+    assert.deepEqual(out.replies.map((r: any) => [r.id, r.depth, r.author, r.reply_to]), [
+      [401, 0, "Alex Kim", undefined], [403, 1, "you", 401], [404, 2, "Alex Kim", 403], [402, 0, "Jordan Lee", undefined],
+    ]);
+    assert.match(out.replies[1].text, /SYSTEM|system/);
+    assert.equal(out.note, undefined);
+    const hidden = parse(await call("get_discussion", { course: "PHIL 230", topic_id: 32 }));
+    assert.equal(hidden.replies, undefined);
+    assert.match(hidden.note, /must post before replies/);
+    assert.match(hidden.prompt, /zombie/);
+    const empty = parse(await call("get_discussion", { course: "PHIL 230", topic_id: 33 }));
+    assert.equal(empty.note, "No replies yet.");
+    const long = parse(await call("get_discussion", { course: "PHIL 230", topic_id: 34 }));
+    assert.equal(long.replies.length, 150);
+    assert.equal(long.replies.at(-1).text, "Post 149");
+    assert.match(long.note, /Showing 150 of 200 replies/);
+    assert.equal(empty.posted, false);
   });
 
   await check("get_grades computes group percentages and shows final score + missing work", async () => {

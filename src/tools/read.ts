@@ -9,7 +9,7 @@ import {
 } from "../grades.js";
 import { findSyllabus } from "../syllabus.js";
 import { compact, errorResult, htmlToText, json, makeDateFormatter } from "../format.js";
-import type { Assignment, AssignmentGroup, CalendarEvent, CanvasFile, Course, CourseUser, DiscussionTopic, GradingStandard, Group, PlannerItem, Submission } from "../types.js";
+import type { Assignment, AssignmentGroup, CalendarEvent, CanvasFile, Course, CourseUser, DiscussionTopic, DiscussionView, DiscussionEntry, GradingStandard, Group, PlannerItem, Submission } from "../types.js";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
@@ -852,6 +852,140 @@ export function registerReadTools(
             url: t.html_url,
           });
         });
+    }),
+  );
+
+  server.registerTool(
+    "list_discussions",
+    {
+      title: "List discussions",
+      description:
+        "Discussion topics in a course (not announcements): due date and points when graded, whether the student " +
+        "has posted, whether a post is required before seeing replies, and unread/reply counts. Use get_discussion " +
+        "to read one.",
+      inputSchema: { course: courseRef },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ course }) => {
+      const c = await courses.resolve(course);
+      const topics = await canvas.getAll<DiscussionTopic>(`/courses/${c.id}/discussion_topics`, { order_by: "recent_activity" });
+      // A graded topic's assignment carries its due date and the student's submission (submitted = posted).
+      const graded = topics.some((t) => t.assignment_id);
+      const assignments = graded
+        ? new Map(
+            (await optional(canvas.getAll<Assignment>(`/courses/${c.id}/assignments`, { include: ["submission"] }), [])).map((a) => [a.id, a]),
+          )
+        : new Map<number, Assignment>();
+      return {
+        course: `${c.course_code} — ${c.name}`,
+        discussions: topics.map((t) => {
+          const a = t.assignment_id ? assignments.get(t.assignment_id) ?? t.assignment ?? undefined : undefined;
+          const posted = a?.submission
+            ? isDone(a.submission)
+            : t.require_initial_post && t.user_can_see_posts === false
+              ? false
+              : undefined;
+          return compact({
+            id: t.id,
+            title: t.title,
+            graded: Boolean(t.assignment_id) || undefined,
+            due: date(a?.due_at),
+            points: a?.points_possible,
+            posted,
+            post_required_to_see_replies: t.require_initial_post || undefined,
+            replies: t.discussion_subentry_count,
+            unread: t.unread_count || undefined,
+            last_reply: date(t.last_reply_at),
+            locked: t.locked_for_user || undefined,
+            url: t.html_url,
+          });
+        }),
+      };
+    }),
+  );
+
+  server.registerTool(
+    "get_discussion",
+    {
+      title: "Get discussion",
+      description:
+        "One discussion topic: the prompt as text and the replies in thread order (depth 0 = top-level post), " +
+        "with author and date, and whether the student has posted. Long threads are cut off with a note.",
+      inputSchema: {
+        course: courseRef,
+        topic_id: z.number().int().describe("Discussion topic id (from list_discussions)"),
+      },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ course, topic_id }) => {
+      const c = await courses.resolve(course);
+      const [t, view, me] = await Promise.all([
+        canvas.get<DiscussionTopic>(`/courses/${c.id}/discussion_topics/${topic_id}`),
+        optional(canvas.get<DiscussionView>(`/courses/${c.id}/discussion_topics/${topic_id}/view`), undefined),
+        optional(canvas.get<{ id: number }>("/users/self"), undefined),
+      ]);
+      const a = t.assignment_id
+        ? await optional(canvas.get<Assignment>(`/courses/${c.id}/assignments/${t.assignment_id}`, { include: ["submission"] }), undefined)
+        : undefined;
+      const names = new Map((view?.participants ?? []).map((p) => [p.id, p.display_name]));
+
+      const MAX_ENTRIES = 150;
+      const MAX_CHARS = 30_000;
+      const entries: Array<Record<string, unknown>> = [];
+      let chars = 0;
+      let total = 0;
+      let postedByMe = false;
+      let full = false; // once one reply doesn't fit, stop so the thread shown has no gaps
+      const walk = (list: DiscussionEntry[] | undefined, depth: number, replyTo?: number) => {
+        for (const e of list ?? []) {
+          if (!e.deleted) {
+            total++;
+            const mine = me !== undefined && e.user_id === me.id;
+            if (mine) postedByMe = true;
+            const text = htmlToText(e.message, 1500) ?? "";
+            if (!full && entries.length < MAX_ENTRIES && chars + text.length <= MAX_CHARS) {
+              chars += text.length;
+              entries.push(compact({
+                id: e.id,
+                reply_to: replyTo,
+                depth,
+                author: mine ? "you" : (e.user_id !== undefined ? names.get(e.user_id) : undefined) ?? "unknown",
+                at: date(e.created_at),
+                text,
+              }));
+            } else {
+              full = true;
+            }
+          }
+          walk(e.replies, depth + 1, e.id);
+        }
+      };
+      walk(view?.view, 0);
+
+      const posted = a?.submission ? isDone(a.submission) || postedByMe : view ? postedByMe : undefined;
+      return compact({
+        course: `${c.course_code} — ${c.name}`,
+        id: t.id,
+        title: t.title,
+        posted_at: date(t.posted_at),
+        author: t.author?.display_name ?? t.user_name,
+        graded: Boolean(t.assignment_id) || undefined,
+        due: date(a?.due_at),
+        points: a?.points_possible,
+        posted,
+        prompt: htmlToText(t.message, 8000),
+        replies: view ? entries : undefined,
+        note: !view
+          ? t.require_initial_post
+            ? "The student must post before replies are visible."
+            : "Replies aren't visible to the student."
+          : total === 0
+            ? "No replies yet."
+            : entries.length < total
+            ? `Showing ${entries.length} of ${total} replies; the rest are cut off. Open the url to read them all.`
+            : undefined,
+        url: t.html_url,
+      });
     }),
   );
 

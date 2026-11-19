@@ -18,6 +18,8 @@ It runs as a Node server on a Mac at home, published over HTTPS with Tailscale F
 | `grade_whatif` | Projects a grade from assumed scores, or the average you need on the remaining work for a target ("B+", "87%"); follows group weights, drop rules, excused work and the course's letter scale |
 | `recently_graded` | What got graded in the last N days across current courses (or one), with score and whether there's feedback to read |
 | `list_events` | Calendar events (exams, office hours, review sessions, your own events) in a date window, optionally one course or a search |
+| `list_discussions` | Discussion topics in a course: due date and points when graded, whether you've posted, whether you must post to see replies, unread counts |
+| `get_discussion` | One discussion's prompt and its replies in thread order, with authors and dates (long threads are cut off with a note) |
 | `list_announcements` | Recent announcements from one or all courses |
 | `get_syllabus` | Syllabus page as text; if it's empty, a page, file or module item named "syllabus" |
 | `read_file` | Text of a course file (PDF slides and handouts, plain text, code, HTML), found by name or id; long PDFs come back a few pages at a time |

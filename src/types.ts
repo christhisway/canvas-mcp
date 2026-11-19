@@ -134,6 +134,31 @@ export interface DiscussionTopic {
   html_url: string;
   author?: { display_name?: string };
   user_name?: string;
+  assignment_id?: number | null;
+  assignment?: Assignment | null;
+  require_initial_post?: boolean | null;
+  /** False when the topic requires an initial post and the student hasn't made one. */
+  user_can_see_posts?: boolean;
+  unread_count?: number;
+  discussion_subentry_count?: number;
+  last_reply_at?: string | null;
+  locked_for_user?: boolean;
+  read_state?: string;
+}
+
+export interface DiscussionEntry {
+  id: number;
+  user_id?: number;
+  message?: string | null;
+  created_at?: string;
+  deleted?: boolean;
+  replies?: DiscussionEntry[];
+}
+
+/** GET /courses/:id/discussion_topics/:tid/view */
+export interface DiscussionView {
+  participants?: Array<{ id: number; display_name: string }>;
+  view?: DiscussionEntry[];
 }
 
 export interface CanvasFile {
