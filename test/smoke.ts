@@ -308,7 +308,7 @@ try {
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
       "course_people", "get_assignment", "get_feedback", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
-      "list_announcements", "list_assignments", "list_courses", "read_file",
+      "list_announcements", "list_assignments", "list_courses", "read_file", "recently_graded",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
   });
@@ -416,6 +416,21 @@ try {
     assert.match(hidden.notes.join(" "), /People list is hidden/);
     assert.match(hidden.notes.join(" "), /isn't in any group/);
     assert.deepEqual([...mock.state.peopleTypesAsked].sort(), ["ta", "teacher"], "never asks for the student roster");
+  });
+
+  await check("recently_graded filters by graded date across current courses, newest first", async () => {
+    const week = parse(await call("recently_graded", {}));
+    // Reading response is graded but not posted, so it's left out; GEOL 101 is a past course.
+    assert.deepEqual(week.graded.map((g: any) => [g.course, g.name, g.grade]), [
+      ["CS 240", "Reflection", "5"], ["PHIL 230", "Quiz 4", "excused"], ["PHIL 230", "Quiz 1", "2"],
+    ]);
+    assert.equal(week.graded[0].comments, 1);
+    assert.equal(week.graded[0].out_of, 5);
+    const two = parse(await call("recently_graded", { days: 14, course: "PHIL 230" }));
+    assert.deepEqual(two.graded.map((g: any) => g.name), ["Quiz 4", "Quiz 1", "Essay 1"]);
+    assert.equal(two.graded[2].rubric, true);
+    const none = parse(await call("recently_graded", { days: 1, course: "CS 240" }));
+    assert.match(none.note, /Nothing graded/);
   });
 
   await check("get_grades computes group percentages and shows final score + missing work", async () => {

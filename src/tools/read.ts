@@ -415,6 +415,66 @@ export function registerReadTools(
   );
 
   server.registerTool(
+    "recently_graded",
+    {
+      title: "Recently graded",
+      description:
+        "Work graded in the last few days, across all current courses or in one, newest first, with the score " +
+        "and whether there are comments or a rubric to read (use get_feedback for those).",
+      inputSchema: {
+        days: z.number().int().min(1).max(120).default(7).describe("How many days back"),
+        course: courseRef.optional().describe("Leave out for all current courses"),
+      },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ days, course }) => {
+      const since = new Date(Date.now() - days * 86_400_000);
+      const scope = course ? [await courses.resolve(course)] : await courses.active();
+      const perCourse = await Promise.all(
+        scope.map(async (c) => {
+          try {
+            const subs = await canvas.getAll<Submission>(`/courses/${c.id}/students/submissions`, {
+              graded_since: since.toISOString(),
+              include: ["assignment", "submission_comments", "rubric_assessment"],
+            });
+            return subs
+              // Unposted grades come back without a score; leave them out rather than hint at them.
+              .filter((s) => s.assignment && s.graded_at && Date.parse(s.graded_at) >= since.getTime())
+              .filter((s) => s.score !== null || s.excused)
+              .map((s) => ({ c, s }));
+          } catch (err) {
+            if (err instanceof CanvasError && !course) return [];
+            throw err;
+          }
+        }),
+      );
+      const rows = perCourse
+        .flat()
+        .sort((x, y) => (y.s.graded_at ?? "").localeCompare(x.s.graded_at ?? ""))
+        .map(({ c, s }) =>
+          compact({
+            course: c.course_code,
+            course_id: c.id,
+            assignment_id: s.assignment!.id,
+            name: s.assignment!.name,
+            score: s.excused ? undefined : s.score,
+            out_of: s.assignment!.points_possible,
+            grade: s.excused ? "excused" : s.grade,
+            graded: date(s.graded_at),
+            late: s.late || undefined,
+            comments: s.submission_comments?.length || undefined,
+            rubric: hasAssessment(s) || undefined,
+          }),
+        );
+      return compact({
+        since: date(since.toISOString()),
+        graded: rows,
+        note: rows.length ? undefined : `Nothing graded in the last ${days} days.`,
+      });
+    }),
+  );
+
+  server.registerTool(
     "get_grades",
     {
       title: "Get grades",

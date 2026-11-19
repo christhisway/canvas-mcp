@@ -188,20 +188,21 @@ export async function startMockCanvas() {
   };
   const mySubs: Record<string, any> = {
     "11": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
-    "12": { workflow_state: "graded", submitted_at: iso(-2), score: 5, grade: "5", attempt: 1, submission_comments: [{ author_name: "TA", comment: "Nice work", created_at: iso(-1) }] },
+    "12": { workflow_state: "graded", submitted_at: iso(-2), graded_at: iso(-1), score: 5, grade: "5", attempt: 1, submission_comments: [{ author_name: "TA", comment: "Nice work", created_at: iso(-1) }] },
     "13": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
     // Past due, never handed in, not graded: invisible in the current score (issue #2).
     "14": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null, missing: true },
     "15": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
-    "17": { workflow_state: "graded", submitted_at: iso(-11), score: 17.8, grade: "17.8", attempt: 1 },
-    "21": { workflow_state: "graded", submitted_at: iso(-40), score: 2, grade: "2", attempt: 1 },
-    "22": { workflow_state: "graded", submitted_at: iso(-30), score: 5, grade: "5", attempt: 1 },
-    "23": { workflow_state: "graded", submitted_at: iso(-20), score: 20, grade: "20", attempt: 1 },
-    "24": { workflow_state: "graded", submitted_at: null, score: null, grade: null, attempt: null, excused: true },
+    "17": { workflow_state: "graded", submitted_at: iso(-11), graded_at: iso(-9), score: 17.8, grade: "17.8", attempt: 1 },
+    "21": { workflow_state: "graded", submitted_at: iso(-40), graded_at: iso(-3), score: 2, grade: "2", attempt: 1 },
+    "22": { workflow_state: "graded", submitted_at: iso(-30), graded_at: iso(-29), score: 5, grade: "5", attempt: 1 },
+    "23": { workflow_state: "graded", submitted_at: iso(-20), graded_at: iso(-19), score: 20, grade: "20", attempt: 1 },
+    "24": { workflow_state: "graded", submitted_at: null, graded_at: iso(-2), score: null, grade: null, attempt: null, excused: true },
     "25": { workflow_state: "graded", submitted_at: iso(-16), graded_at: iso(-12), score: 45, grade: "45", attempt: 1,
       rubric_assessment: { c1: { points: 15, rating_id: "r2", comments: "State the claim in the first paragraph." }, c2: { points: 20, rating_id: "r4", comments: "" }, c3: { points: 10, comments: "" } },
       submission_comments: [{ author_name: "Prof. B", comment: "Good use of Searle. See my markup.", created_at: iso(-12), attachments: [{ display_name: "essay1-markup.pdf", url: "https://canvas.test/files/9/download" }] }] },
-    "16": { workflow_state: "submitted", submitted_at: iso(-3), score: null, grade: null, attempt: 1 },
+    // Graded but not posted to students yet: Canvas hides the score.
+    "16": { workflow_state: "graded", submitted_at: iso(-3), graded_at: iso(-1), score: null, grade: null, attempt: 1 },
   };
 
   app.get("/api/v1/courses/:cid/assignments", (req, res) => {
@@ -264,6 +265,7 @@ export async function startMockCanvas() {
     res.json(
       Object.values(assignments)
         .filter((a) => String(a.course_id) === req.params.cid)
+        .filter((a) => !req.query.graded_since || (mySubs[a.id].graded_at && mySubs[a.id].graded_at >= String(req.query.graded_since)))
         .map((a) => ({ ...mySubs[a.id], assignment_id: a.id, assignment: include.includes("assignment") ? a : undefined })),
     );
   });
