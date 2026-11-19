@@ -313,11 +313,23 @@ try {
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
   });
 
-  await check("list_courses follows pagination", async () => {
+  await check("list_courses follows pagination and leaves out ended courses", async () => {
     const out = parse(await call("list_courses"));
-    assert.equal(out.length, 2);
-    assert.equal(out[1].code, "PHIL 230");
+    assert.deepEqual(out.map((c: any) => c.code), ["CS 240", "PHIL 230"]);
     assert.equal(out[0].current_grade, "A");
+    const all = parse(await call("list_courses", { include_past: true }));
+    assert.deepEqual(all.map((c: any) => [c.code, c.ended ?? false]), [
+      ["CS 240", false], ["PHIL 230", false], ["GEOL 101", true], ["HIST 105", true],
+    ]);
+  });
+
+  await check("a past course still resolves by name or id; announcements skip it", async () => {
+    const byName = parse(await call("get_grades", { course: "geology" }));
+    assert.match(byName.course, /GEOL 101/);
+    const byId = parse(await call("get_grades", { course: "404" }));
+    assert.match(byId.course, /HIST 105/);
+    const announcements = parse(await call("list_announcements", {}));
+    assert.ok(announcements.every((a: any) => a.course !== "GEOL 101"));
   });
 
   await check("get_upcoming hides done items + announcements, sorts by date", async () => {

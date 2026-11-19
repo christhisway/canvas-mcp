@@ -38,13 +38,16 @@ export async function startMockCanvas() {
   });
 
   const courses = [
-    { id: 101, name: "Software Design", course_code: "CS 240", term: { name: "Fall 2026" }, enrollments: [{ type: "student", computed_current_score: 93.4, computed_current_grade: "A" }] },
+    { id: 101, name: "Software Design", course_code: "CS 240", term: { name: "Fall 2026", end_at: iso(40) }, enrollments: [{ type: "student", computed_current_score: 93.4, computed_current_grade: "A" }] },
     { id: 202, name: "Philosophy of Mind", course_code: "PHIL 230", term: { name: "Fall 2026" }, enrollments: [{ type: "student", computed_current_score: 88.1, computed_current_grade: "B+" }] },
+    // Enrollments Canvas still calls "active" although the course is over (issue #1).
+    { id: 303, name: "Intro to Geology", course_code: "GEOL 101", term: { name: "Fall 2025", end_at: iso(-320) }, enrollments: [{ type: "student", computed_current_score: 91, computed_current_grade: "A-" }] },
+    { id: 404, name: "World History", course_code: "HIST 105", concluded: true, term: { name: "Spring 2026" }, enrollments: [{ type: "student" }] },
   ];
 
   app.get("/api/v1/courses", (req, res) => {
     const base = `http://${req.headers.host}/api/v1/courses`;
-    if (req.query.page === "2") return res.json([courses[1]]);
+    if (req.query.page === "2") return res.json(courses.slice(1));
     res.set("Link", `<${base}?page=2&per_page=1>; rel="next", <${base}?page=1>; rel="first"`);
     res.json([courses[0]]);
   });

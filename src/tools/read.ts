@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CanvasClient } from "../canvas.js";
-import type { CourseDirectory } from "../courses.js";
+import { hasEnded, type CourseDirectory } from "../courses.js";
 import { compact, errorResult, htmlToText, json, makeDateFormatter } from "../format.js";
 import type { Assignment, AssignmentGroup, Course, DiscussionTopic, PlannerItem, Submission } from "../types.js";
 
@@ -57,12 +57,19 @@ export function registerReadTools(
     "list_courses",
     {
       title: "List courses",
-      description: "Lists the student's active Canvas courses with term and current grade.",
-      inputSchema: {},
+      description:
+        "Lists the student's current Canvas courses with term and grade. Courses from terms that have ended " +
+        "are left out unless include_past is true.",
+      inputSchema: {
+        include_past: z
+          .boolean()
+          .default(false)
+          .describe("Also list courses from terms that have ended (marked ended: true)"),
+      },
       annotations: READ_ONLY,
     },
-    wrap(async () => {
-      const list = await courses.active(true);
+    wrap(async ({ include_past }) => {
+      const list = include_past ? await courses.all(true) : await courses.active(true);
       return list.map((c) => {
         const e = studentEnrollment(c);
         return compact({
@@ -70,6 +77,7 @@ export function registerReadTools(
           code: c.course_code,
           name: c.name,
           term: c.term?.name,
+          ended: (include_past && hasEnded(c)) || undefined,
           current_score: e?.computed_current_score,
           current_grade: e?.computed_current_grade,
         });
@@ -254,9 +262,9 @@ export function registerReadTools(
     "list_announcements",
     {
       title: "List announcements",
-      description: "Recent announcements, from one course or from all active courses.",
+      description: "Recent announcements, from one course or from all current courses.",
       inputSchema: {
-        course: courseRef.optional().describe("Leave out for all active courses"),
+        course: courseRef.optional().describe("Leave out for all current courses"),
         days: z.number().int().min(1).max(120).default(14).describe("How many days back"),
       },
       annotations: READ_ONLY,

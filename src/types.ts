@@ -14,7 +14,12 @@ export interface Course {
   name: string;
   course_code: string;
   workflow_state?: string;
-  term?: { name: string; end_at?: string | null };
+  start_at?: string | null;
+  end_at?: string | null;
+  restrict_enrollments_to_course_dates?: boolean;
+  /** Present with include[]=concluded. */
+  concluded?: boolean;
+  term?: { name: string; start_at?: string | null; end_at?: string | null };
   enrollments?: Enrollment[];
   syllabus_body?: string | null;
   html_url?: string;
