@@ -68,26 +68,52 @@ You'll need:
 - [ ] In the [admin console](https://login.tailscale.com/admin):
   - [ ] **Machines → this Mac → ⋯ → Edit machine name.** Pick something permanent, like `home-server`, because it becomes part of the public URL.
   - [ ] **DNS:** MagicDNS is on, and **HTTPS Certificates** is enabled.
-  - [ ] **Access controls:** the policy below lets your own devices reach each other, and reach the server **only over SSH**. It gives the server no access to anything else, and allows Funnel on it.
-    - If the policy is still the default, replace it with this. Otherwise merge these parts in.
-    - The editor validates the policy when you save.
+  - [ ] **Access controls:** replace the whole policy with the one below. It lets your own devices reach each other, and reach the server **only over SSH**. It gives the server no access to anything else, and allows Funnel on it.
+    - **Don't merge it into the default policy.** The default's `{"src": ["*"], "dst": ["*"], "ip": ["*"]}` grant allows everything, and grants only ever *add* access. Keeping that line would cancel the isolation.
+    - The `ssh` block is the default's Tailscale SSH rule, kept unchanged. It doesn't apply to the server, which uses macOS Remote Login on port 22.
+    - **Replace `YOUR-TAILSCALE-LOGIN`** (twice, in `tests`) with your login exactly as it appears on the admin console's **Users** page. The `tests` run on every save, so the editor refuses a policy that breaks the isolation.
 
     ```jsonc
     {
-      "tagOwners": {
-        "tag:server": ["autogroup:admin"]
-      },
-      "grants": [
-        // Your devices can reach each other...
-        { "src": ["autogroup:member"], "dst": ["autogroup:member"], "ip": ["*"] },
-        // ...and the server, but only over SSH. Nothing grants the server access to anything.
-        { "src": ["autogroup:member"], "dst": ["tag:server"], "ip": ["tcp:22"] }
-      ],
-      "nodeAttrs": [
-        { "target": ["tag:server"], "attr": ["funnel"] }
-      ]
+    	// Tags, and who may apply them.
+    	"tagOwners": {
+    		"tag:server": ["autogroup:admin"],
+    	},
+
+    	"grants": [
+    		// Your own devices can reach each other.
+    		{"src": ["autogroup:member"], "dst": ["autogroup:member"], "ip": ["*"]},
+    		// ...and the home server, but only over SSH (macOS Remote Login).
+    		// Nothing grants tag:server access to anything, so the server can't reach your devices.
+    		{"src": ["autogroup:member"], "dst": ["tag:server"], "ip": ["tcp:22"]},
+    	],
+
+    	// Allow Funnel (the public HTTPS address) on the server.
+    	"nodeAttrs": [
+    		{"target": ["tag:server"], "attr": ["funnel"]},
+    	],
+
+    	// Tailscale SSH, unchanged from the default. Covers your own untagged devices only.
+    	"ssh": [
+    		{
+    			"action": "check",
+    			"src":    ["autogroup:member"],
+    			"dst":    ["autogroup:self"],
+    			"users":  ["autogroup:nonroot", "root"],
+    		},
+    	],
+
+    	// Checked on every save; the save fails if any of these doesn't hold.
+    	"tests": [
+    		// You can SSH to the server, but reach nothing else on it.
+    		{"src": "YOUR-TAILSCALE-LOGIN", "accept": ["tag:server:22"], "deny": ["tag:server:8787"]},
+    		// The server can't reach your devices.
+    		{"src": "tag:server", "deny": ["YOUR-TAILSCALE-LOGIN:22"]},
+    	],
     }
     ```
+    - If the editor rejects only the `tests` block, delete it and save without it; the rest of the policy doesn't depend on it.
+    - Save the policy **before** tagging the machine. `tag:server` can't be applied until `tagOwners` defines it.
   - [ ] **Machines → this Mac → ⋯ → Edit ACL tags → add `tag:server`.** Tagged machines also don't have key expiry, so the server won't drop off Tailscale after 180 days.
 - [ ] **Check:** `tailscale status` shows this Mac online.
 
