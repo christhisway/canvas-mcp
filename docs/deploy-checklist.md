@@ -131,14 +131,27 @@ Log out of the admin account and log in as `connectors`. Do every step from here
   ```
 - [ ] **Add the key to GitHub.** On GitHub → christhisway/canvas-mcp → Settings → Deploy keys → **Add deploy key**. Paste the public key and leave **Allow write access unticked**.
   - Or, from your laptop: `gh repo deploy-key add <file>.pub -R christhisway/canvas-mcp`
-- [ ] **Tell SSH to use that key for this repo.** Add this to `~/.ssh/config`:
-  ```
+- [ ] **Tell SSH to use that key for this repo.** The file is `/Users/connectors/.ssh/config`. It probably doesn't exist yet, and Finder hides `~/.ssh`, so add the block from Terminal. This creates the file, or appends to it if it exists:
+  ```bash
+  cat >> ~/.ssh/config <<'EOF'
+
   Host github-canvas-mcp
     HostName github.com
     User git
     IdentityFile ~/.ssh/canvas-mcp-deploy
     IdentitiesOnly yes
+  EOF
+  chmod 600 ~/.ssh/config
   ```
+  - SSH ignores a config file that other users can write to, hence the `chmod`.
+  - To edit it later, use `nano ~/.ssh/config`. Avoid TextEdit, which can switch to rich text or add `.txt`.
+- [ ] **Test the key:**
+  ```bash
+  ssh -T github-canvas-mcp
+  ```
+  - On the first connection, compare the host fingerprint against [GitHub's published fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints) before typing `yes`.
+  - It should answer "Hi christhisway/canvas-mcp! You've successfully authenticated, but GitHub does not provide shell access."
+  - `Permission denied (publickey)` means the key isn't on GitHub yet, or the config points at the wrong file. Check with `ls -l ~/.ssh`.
 - [ ] **Clone the repo and create the config file:**
   ```bash
   mkdir -p ~/connectors
@@ -146,7 +159,6 @@ Log out of the admin account and log in as `connectors`. Do every step from here
   cd ~/connectors/canvas-mcp
   cp .env.example .env && chmod 600 .env
   ```
-  On the first connection, compare the host fingerprint against [GitHub's published fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints) before typing `yes`.
 
 ## 6. `connectors` user: turn on Funnel
 
