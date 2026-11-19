@@ -1,11 +1,11 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasError, optional, type CanvasClient } from "../canvas.js";
-import { hasEnded, type CourseDirectory } from "../courses.js";
-import { fileKind, findFiles, humanSize, MAX_FILE_BYTES, pdfText, pickFile, plainText } from "../files.js";
+import { hasEnded, isStudent, notStudentError, type CourseDirectory } from "../courses.js";
+import { fileKind, findFiles, friendlyType, humanSize, MAX_FILE_BYTES, pdfText, pickFile, plainText } from "../files.js";
 import {
   CANVAS_DEFAULT_SCALE, currentView, finalView, gradeCourse, gradeGroup, letterFor, parseTarget, round2, scaleFrom, solveTarget,
-  toGradeGroups, type GradeGroup, type GradeItem,
+  toGradeGroups, type CourseResult as GradeCourseResult, type GradeGroup, type GradeItem,
 } from "../grades.js";
 import { modulesWithItems } from "../modules.js";
 import { findSyllabus } from "../syllabus.js";
@@ -68,6 +68,21 @@ export function registerReadTools(
       url: a.html_url,
     });
 
+  /** A course for a student-only tool; a TA or teacher enrollment gets a plain message, not a 403 (issue #25). */
+  const studentCourse = async (ref: string, what: string) => {
+    const c = await courses.resolve(ref);
+    if (!isStudent(c)) throw notStudentError(c, what);
+    return c;
+  };
+  /** Student-only endpoints still 403 when Canvas's enrollment list didn't say; say why instead. */
+  const asStudent = <T,>(c: Course, what: string, p: Promise<T>) =>
+    p.catch((err) => {
+      if (err instanceof CanvasError && err.status === 403 && !/rate limit/i.test(err.message)) {
+        throw new Error(`Canvas won't show ${what} in ${c.course_code}; this usually means you aren't enrolled there as a student.`);
+      }
+      throw err;
+    });
+
   const wrap =
     <A,>(fn: (args: A) => Promise<unknown>) =>
     async (args: A) => {
@@ -84,7 +99,7 @@ export function registerReadTools(
       title: "List courses",
       description:
         "Lists the student's current Canvas courses with term and grade. Courses from terms that have ended " +
-        "are left out unless include_past is true. " +
+        "are left out unless include_past is true (which also lists courses whose enrollment Canvas has concluded). " +
         SCORES_NOTE,
       inputSchema: {
         include_past: z
@@ -95,7 +110,9 @@ export function registerReadTools(
       annotations: READ_ONLY,
     },
     wrap(async ({ include_past }) => {
-      const list = include_past ? await courses.all(true) : await courses.active(true);
+      const list = include_past
+        ? [...(await courses.all(true)), ...(await optional(courses.completed(true), []))]
+        : await courses.active(true);
       return list.map((c) =>
         compact({
           id: c.id,
@@ -348,13 +365,13 @@ export function registerReadTools(
       annotations: READ_ONLY,
     },
     wrap(async ({ course, assignment_id, name }) => {
-      const c = await courses.resolve(course);
+      const c = await studentCourse(course, "feedback");
       const label = `${c.course_code} — ${c.name}`;
 
       if (assignment_id === undefined && !name?.trim()) {
-        const subs = await canvas.getAll<Submission>(`/courses/${c.id}/students/submissions`, {
+        const subs = await asStudent(c, "feedback", canvas.getAll<Submission>(`/courses/${c.id}/students/submissions`, {
           include: ["submission_comments", "rubric_assessment", "assignment"],
-        });
+        }));
         const withFeedback = subs
           .filter((s) => s.assignment && ((s.submission_comments?.length ?? 0) > 0 || hasAssessment(s)))
           .sort((x, y) => (y.graded_at ?? "").localeCompare(x.graded_at ?? ""));
@@ -402,9 +419,9 @@ export function registerReadTools(
 
       const [a, s] = await Promise.all([
         canvas.get<Assignment>(`/courses/${c.id}/assignments/${aid}`),
-        canvas.get<Submission>(`/courses/${c.id}/assignments/${aid}/submissions/self`, {
+        asStudent(c, "feedback", canvas.get<Submission>(`/courses/${c.id}/assignments/${aid}/submissions/self`, {
           include: ["submission_comments", "rubric_assessment"],
-        }),
+        })),
       ]);
       const rubric = hasAssessment(s) ? rubricOut(a, s) : undefined;
       const comments = commentsOut(s);
@@ -447,7 +464,7 @@ export function registerReadTools(
     },
     wrap(async ({ days, course }) => {
       const since = new Date(Date.now() - days * 86_400_000);
-      const scope = course ? [await courses.resolve(course)] : await courses.active();
+      const scope = course ? [await studentCourse(course, "graded work")] : (await courses.active()).filter(isStudent);
       const perCourse = await Promise.all(
         scope.map(async (c) => {
           try {
@@ -462,6 +479,9 @@ export function registerReadTools(
               .map((s) => ({ c, s }));
           } catch (err) {
             if (err instanceof CanvasError && !course) return [];
+            if (err instanceof CanvasError && err.status === 403) {
+              throw new Error(`Canvas won't show graded work in ${c.course_code}; this usually means you aren't enrolled there as a student.`);
+            }
             throw err;
           }
         }),
@@ -506,7 +526,7 @@ export function registerReadTools(
       annotations: READ_ONLY,
     },
     wrap(async ({ course }) => {
-      const c = await courses.resolve(course);
+      const c = await studentCourse(course, "grade");
       const groups = await canvas.getAll<AssignmentGroup>(`/courses/${c.id}/assignment_groups`, {
         include: ["assignments", "submission"],
       });
@@ -584,7 +604,7 @@ export function registerReadTools(
       annotations: READ_ONLY,
     },
     wrap(async ({ course, target, hypotheticals, count_missing_as_zero }) => {
-      const c = await courses.resolve(course);
+      const c = await studentCourse(course, "grade");
       const [full, canvasGroups] = await Promise.all([
         canvas.get<Course>(`/courses/${c.id}`, { include: ["total_scores"] }),
         canvas.getAll<AssignmentGroup>(`/courses/${c.id}/assignment_groups`, {
@@ -598,13 +618,23 @@ export function registerReadTools(
       let scale = CANVAS_DEFAULT_SCALE;
       let scaleSource = "Canvas default";
       if (full.grading_standard_id) {
+        const sid = full.grading_standard_id;
         const standards = await optional(canvas.getAll<GradingStandard>(`/courses/${c.id}/grading_standards`), []);
-        const own = standards.find((s) => s.id === full.grading_standard_id);
+        // A scheme set at the account or institution level isn't in the course's list (issue #22); ask for it
+        // by id, through the course and then the account.
+        let own = standards.find((s) => s.id === sid);
+        if (!own) own = await optional<GradingStandard | undefined>(canvas.get<GradingStandard>(`/courses/${c.id}/grading_standards/${sid}`), undefined);
+        if (!own && full.account_id) {
+          own = await optional<GradingStandard | undefined>(canvas.get<GradingStandard>(`/accounts/${full.account_id}/grading_standards/${sid}`), undefined);
+        }
         if (own?.grading_scheme?.length) {
           scale = scaleFrom(own);
           scaleSource = `course ("${own.title}")`;
         } else {
-          notes.push("Couldn't read the course's own letter scale, so letters use Canvas's default scale.");
+          notes.push(
+            "The course has its own letter scale, but Canvas doesn't let students read it, so letters use Canvas's " +
+              "default scale; check the syllabus for the real cutoffs.",
+          );
         }
       }
 
@@ -641,8 +671,11 @@ export function registerReadTools(
       }
 
       let projected: Record<string, unknown> | undefined;
+      let projectedGroups: GradeCourseResult["groups"] | undefined;
       if (assumed.size > 0) {
-        projected = { current: view(withAssumed, currentView).out, final: view(withAssumed, finalView).out };
+        const pc = view(withAssumed, currentView);
+        projected = { current: pc.out, final: view(withAssumed, finalView).out };
+        projectedGroups = pc.result.groups;
       }
 
       let targetOut: Record<string, unknown> | undefined;
@@ -666,9 +699,13 @@ export function registerReadTools(
           worst_possible: r.worst_possible,
           note: r.already_secured
             ? "Reached even with 0 on everything remaining."
-            : !r.reachable
-              ? `Unreachable: 100% on everything remaining gives ${r.best_possible ?? "no grade"}.`
-              : `Needs an average of ${r.needed_percent}% on the remaining work (every remaining item at that percentage).`,
+            : remainingItems.length === 0
+              ? "No ungraded work is left in Canvas (after any hypotheticals), so nothing can change the grade here. Assignments the " +
+                "instructor hasn't created in Canvas yet (often the final exam) aren't counted; check the syllabus."
+              : !r.reachable
+                ? `Unreachable: 100% on everything remaining gives ${r.best_possible ?? "no grade"}.`
+                : `Needs an average of ${r.needed_percent}% on the remaining work (every remaining item at that ` +
+                  "percentage), rounded up to a tenth of a percent so it's always enough.",
           remaining: remainingItems.map((i) => ({ id: i.id, name: i.name, points: i.points })),
           counted_as_zero: zeroed.length ? zeroed.map((i) => ({ id: i.id, name: i.name, points: i.points })) : undefined,
         });
@@ -695,6 +732,8 @@ export function registerReadTools(
             weight_percent: weighted ? r.group.weight : undefined,
             current_percent: r.percent === null ? undefined : round2(r.percent),
             final_percent: finalGroups[i].percent === null ? undefined : round2(finalGroups[i].percent!),
+            // With hypotheticals, the group as projected; current and final stay as Canvas has them now.
+            projected_percent: projectedGroups?.[i].percent == null ? undefined : round2(projectedGroups[i].percent!),
             drops: r.group.drop_lowest || r.group.drop_highest
               ? compact({ lowest: r.group.drop_lowest || undefined, highest: r.group.drop_highest || undefined })
               : undefined,
@@ -751,13 +790,22 @@ export function registerReadTools(
         const roles = kinds.length ? kinds : staffTypes.length === 1 ? [staffTypes[0]] : ["teacher or ta"];
         const custom = mine.map((e) => e.role).find((r) => r && !STAFF_ROLE[r]);
         return compact({
-          name: u.name,
+          name: displayName(u),
           role: roles.join(", "),
           role_name: custom,
           pronouns: u.pronouns || undefined,
           email: u.email || undefined,
         });
       });
+      // The same person can come back once per section or account (issue #26): merge identical name + role
+      // pairs unless they show different emails.
+      const merged: typeof staffOut = [];
+      for (const p of staffOut) {
+        const same = merged.find((m) => m.name === p.name && m.role === p.role && (!m.email || !p.email || m.email === p.email));
+        if (!same) merged.push(p);
+        else Object.assign(same, compact({ ...p, ...same }));
+      }
+      staffOut.splice(0, staffOut.length, ...merged);
       staffOut.sort((a, b) => (a.role === b.role ? 0 : a.role === "teacher" ? -1 : 1));
 
       if (groups === undefined) notes.push("Couldn't read the student's groups.");
@@ -768,7 +816,7 @@ export function registerReadTools(
           return compact({
             group: g.name,
             members: members?.map((u) =>
-              compact({ name: u.name, pronouns: u.pronouns || undefined, email: u.email || undefined, you: me && u.id === me.id ? true : undefined }),
+              compact({ name: displayName(u), pronouns: u.pronouns || undefined, email: u.email || undefined, you: me && u.id === me.id ? true : undefined }),
             ),
             note: members ? undefined : "This group's member list is hidden.",
           });
@@ -792,16 +840,21 @@ export function registerReadTools(
       description:
         "Canvas calendar events (exams, office hours, review sessions, the student's own events) in a date " +
         "window, from all current courses or one. Many instructors only put exam dates here, so get_upcoming " +
-        "doesn't show them.",
+        "doesn't show them. Exams that are Canvas assignments or quizzes (e.g. an online \"Final\") are calendar " +
+        "assignments, not events: include_assignments adds them (on by default when search is given).",
       inputSchema: {
         days_ahead: z.number().int().min(0).max(365).default(14).describe("How many days forward from now"),
         days_back: z.number().int().min(0).max(120).default(0).describe("Also include this many past days"),
         course: courseRef.optional().describe("Leave out for all current courses (plus the student's own calendar)"),
         search: z.string().optional().describe('Only events whose title or description contains this, e.g. "exam"'),
+        include_assignments: z
+          .boolean()
+          .optional()
+          .describe("Also list assignment due dates from the calendar (default: true when search is given)"),
       },
       annotations: READ_ONLY,
     },
-    wrap(async ({ days_ahead, days_back, course, search }) => {
+    wrap(async ({ days_ahead, days_back, course, search, include_assignments }) => {
       const scope = course ? [await courses.resolve(course)] : await courses.active();
       const byCode = new Map(scope.map((c) => [`course_${c.id}`, c]));
       const codes = [...byCode.keys()];
@@ -811,15 +864,23 @@ export function registerReadTools(
       }
       const now = Date.now();
       const window = {
-        type: "event",
         start_date: new Date(now - days_back * 86_400_000).toISOString(),
         end_date: new Date(now + days_ahead * 86_400_000).toISOString(),
       };
+      // Exams are often assignments (issue #23), which Canvas only returns for type=assignment.
+      const withAssignments = include_assignments ?? Boolean(search?.trim());
+      const types = withAssignments ? ["event", "assignment"] : ["event"];
       // Canvas accepts only a limited number of context codes per request (10 for most users).
       const batches: string[][] = [];
       for (let i = 0; i < codes.length; i += 10) batches.push(codes.slice(i, i + 10));
       const events = (
-        await Promise.all(batches.map((b) => canvas.getAll<CalendarEvent>("/calendar_events", { ...window, context_codes: b })))
+        await Promise.all(
+          types.flatMap((type) =>
+            batches
+              .filter((b) => type === "event" || b.some((code) => code.startsWith("course_")))
+              .map((b) => canvas.getAll<CalendarEvent>("/calendar_events", { type, ...window, context_codes: b })),
+          ),
+        )
       ).flat();
 
       const needle = search?.trim().toLowerCase();
@@ -833,6 +894,17 @@ export function registerReadTools(
         .map(({ e, text }) => {
           const c = e.context_code ? byCode.get(e.context_code) : undefined;
           const allDay = Boolean(e.all_day && e.all_day_date);
+          if (e.assignment) {
+            return compact({
+              title: e.title,
+              course: c?.course_code ?? e.context_code,
+              type: e.assignment.is_quiz_assignment || e.assignment.submission_types?.includes("online_quiz") ? "quiz" : "assignment",
+              assignment_id: e.assignment.id,
+              due: date(e.assignment.due_at ?? e.start_at),
+              points: e.assignment.points_possible ?? undefined,
+              url: e.html_url,
+            });
+          }
           return compact({
             title: e.title,
             course: c?.course_code ?? (e.context_code?.startsWith("user_") ? "personal" : e.context_code),
@@ -843,7 +915,15 @@ export function registerReadTools(
             url: e.html_url,
           });
         });
-      return compact({ events: rows, note: rows.length ? undefined : "No calendar events in that window." });
+      return compact({
+        events: rows,
+        note: rows.length
+          ? undefined
+          : withAssignments
+            ? "Nothing on the calendar in that window. Exam dates may be only in the syllabus (get_syllabus) or module headings (list_modules)."
+            : "No calendar events in that window. Exams may be assignments: call again with include_assignments, " +
+              "or try list_assignments with search \"final\" or get_syllabus.",
+      });
     }),
   );
 
@@ -851,14 +931,17 @@ export function registerReadTools(
     "list_announcements",
     {
       title: "List announcements",
-      description: "Recent announcements, from one course or from all current courses.",
+      description:
+        "Recent announcements, newest first, from one course or from all current courses. Across all courses " +
+        "each message is a short preview; name the course to read announcements in full.",
       inputSchema: {
         course: courseRef.optional().describe("Leave out for all current courses"),
         days: z.number().int().min(1).max(120).default(14).describe("How many days back"),
+        limit: z.number().int().min(1).max(50).default(10).describe("Most announcements to return"),
       },
       annotations: READ_ONLY,
     },
-    wrap(async ({ course, days }) => {
+    wrap(async ({ course, days, limit }) => {
       const scope = course ? [await courses.resolve(course)] : await courses.active();
       if (scope.length === 0) return [];
       const byCode = new Map(scope.map((c) => [`course_${c.id}`, c]));
@@ -867,8 +950,11 @@ export function registerReadTools(
         start_date: new Date(Date.now() - days * 86_400_000).toISOString(),
         end_date: new Date().toISOString(),
       });
+      // Previews across courses, full text for one (issue #12).
+      const maxChars = course ? 2500 : 600;
       return topics
         .sort((a, b) => (b.posted_at ?? "").localeCompare(a.posted_at ?? ""))
+        .slice(0, limit)
         .map((t) => {
           const c = t.context_code ? byCode.get(t.context_code) : undefined;
           return compact({
@@ -876,7 +962,7 @@ export function registerReadTools(
             title: t.title,
             posted: date(t.posted_at),
             author: t.author?.display_name ?? t.user_name,
-            message: htmlToText(t.message, 2500),
+            message: htmlToText(t.message, maxChars),
             url: t.html_url,
           });
         });
@@ -889,8 +975,9 @@ export function registerReadTools(
       title: "List discussions",
       description:
         "Discussion topics in a course (not announcements): due date and points when graded, whether the student " +
-        "has posted, whether a post is required before seeing replies, and unread/reply counts. Use get_discussion " +
-        "to read one.",
+        "has posted, whether a post is required before seeing replies, and unread/reply counts. Fields that would " +
+        "be false or empty are left out, so a topic without post_required_to_see_replies doesn't require one. " +
+        "Use get_discussion to read one.",
       inputSchema: { course: courseRef },
       annotations: READ_ONLY,
     },
@@ -938,14 +1025,17 @@ export function registerReadTools(
       title: "Get discussion",
       description:
         "One discussion topic: the prompt as text and the replies in thread order (depth 0 = top-level post), " +
-        "with author and date, and whether the student has posted. Long threads are cut off with a note.",
+        "with author and date, and whether the student has posted. In long threads, long replies are shortened " +
+        "first, then whole threads at the end are left out, with a note. mine_only keeps just the student's own " +
+        "posts, the replies to them and the posts they answered.",
       inputSchema: {
         course: courseRef,
         topic_id: z.number().int().describe("Discussion topic id (from list_discussions)"),
+        mine_only: z.boolean().default(false).describe("Only the student's posts and the replies around them"),
       },
       annotations: READ_ONLY,
     },
-    wrap(async ({ course, topic_id }) => {
+    wrap(async ({ course, topic_id, mine_only }) => {
       const c = await courses.resolve(course);
       const [t, view, me] = await Promise.all([
         canvas.get<DiscussionTopic>(`/courses/${c.id}/discussion_topics/${topic_id}`),
@@ -957,38 +1047,19 @@ export function registerReadTools(
         : undefined;
       const names = new Map((view?.participants ?? []).map((p) => [p.id, p.display_name]));
 
-      const MAX_ENTRIES = 150;
-      const MAX_CHARS = 30_000;
-      const entries: Array<Record<string, unknown>> = [];
-      let chars = 0;
-      let total = 0;
-      let postedByMe = false;
-      let full = false; // once one reply doesn't fit, stop so the thread shown has no gaps
-      const walk = (list: DiscussionEntry[] | undefined, depth: number, replyTo?: number) => {
-        for (const e of list ?? []) {
-          if (!e.deleted) {
-            total++;
-            const mine = me !== undefined && e.user_id === me.id;
-            if (mine) postedByMe = true;
-            const text = htmlToText(e.message, 1500) ?? "";
-            if (!full && entries.length < MAX_ENTRIES && chars + text.length <= MAX_CHARS) {
-              chars += text.length;
-              entries.push(compact({
-                id: e.id,
-                reply_to: replyTo,
-                depth,
-                author: mine ? "you" : (e.user_id !== undefined ? names.get(e.user_id) : undefined) ?? "unknown",
-                at: date(e.created_at),
-                text,
-              }));
-            } else {
-              full = true;
-            }
-          }
-          walk(e.replies, depth + 1, e.id);
-        }
-      };
-      walk(view?.view, 0);
+      const replies = threadReplies(view, me, mine_only);
+      const postedByMe = replies.postedByMe;
+      const entries = replies.entries.map((r) =>
+        compact({
+          id: r.id,
+          reply_to: r.replyTo,
+          depth: r.depth,
+          author: r.mine ? "you" : (r.userId !== undefined ? names.get(r.userId) : undefined) ?? "unknown",
+          at: date(r.createdAt),
+          text: r.text,
+        }),
+      );
+      const total = replies.total;
 
       const posted = a?.submission ? isDone(a.submission) || postedByMe : view ? postedByMe : undefined;
       return compact({
@@ -1007,11 +1078,11 @@ export function registerReadTools(
           ? t.require_initial_post
             ? "The student must post before replies are visible."
             : "Replies aren't visible to the student."
-          : total === 0
+          : replies.all === 0
             ? "No replies yet."
-            : entries.length < total
-            ? `Showing ${entries.length} of ${total} replies; the rest are cut off. Open the url to read them all.`
-            : undefined,
+            : mine_only && total === 0
+              ? "The student hasn't posted in this discussion."
+              : replies.note,
         url: t.html_url,
       });
     }),
@@ -1024,24 +1095,37 @@ export function registerReadTools(
       description:
         "A course's modules in order: the student's progress in each (locked, unlocked, started, completed), " +
         "unlock dates and prerequisites, and their items with due dates, completion requirements and whether " +
-        "they're met. next is the first required item still to do. search narrows the listing to modules or " +
-        "items whose name contains it.",
+        "they're met, plus submitted/missing on assignments, quizzes and graded discussions. next is the first " +
+        "required item still to do. Completed modules are shortened to their name and item count unless " +
+        "include_completed is true or search matches them. search narrows the listing to modules or items whose " +
+        "name contains it.",
       inputSchema: {
         course: courseRef,
         search: z.string().optional().describe("Only modules or items whose name contains this text"),
+        include_completed: z.boolean().default(false).describe("Also list the items of completed modules"),
       },
       annotations: READ_ONLY,
     },
-    wrap(async ({ course, search }) => {
+    wrap(async ({ course, search, include_completed }) => {
       const c = await courses.resolve(course);
-      const modules = (await modulesWithItems(canvas, c.id, { include: ["content_details"] })).sort(
-        (a, b) => (a.position ?? 0) - (b.position ?? 0),
-      );
+      const [unsorted, assignments] = await Promise.all([
+        modulesWithItems(canvas, c.id, { include: ["content_details"] }),
+        // Module items carry no submission status (issue #24); the assignments list does, in one request.
+        optional(canvas.getAll<Assignment>(`/courses/${c.id}/assignments`, { include: ["submission"] }), []),
+      ]);
+      const modules = unsorted.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      const byItem = new Map<string, Assignment>();
+      for (const a of assignments) {
+        byItem.set(`Assignment:${a.id}`, a);
+        if (a.quiz_id) byItem.set(`Quiz:${a.quiz_id}`, a);
+        if (a.discussion_topic?.id) byItem.set(`Discussion:${a.discussion_topic.id}`, a);
+      }
       const names = new Map(modules.map((m) => [m.id, m.name]));
       const sorted = (m: Module) => [...(m.items ?? [])].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
 
-      const itemOut = (i: ModuleItem) =>
-        compact({
+      const itemOut = (i: ModuleItem) => {
+        const sub = i.content_id !== undefined ? byItem.get(`${i.type}:${i.content_id}`)?.submission : undefined;
+        return compact({
           title: i.title,
           type: i.type === "SubHeader" ? "heading" : i.type,
           indent: i.indent || undefined,
@@ -1049,9 +1133,12 @@ export function registerReadTools(
           points: i.content_details?.points_possible ?? undefined,
           requirement: requirementLabel(i),
           done: i.completion_requirement ? Boolean(i.completion_requirement.completed) : undefined,
+          submitted: isDone(sub) || undefined,
+          missing: sub?.missing || undefined,
           locked: i.content_details?.locked_for_user || undefined,
           url: i.html_url ?? i.external_url,
         });
+      };
 
       // What's next: the first unmet requirement in a module the student can work in.
       let next: Record<string, unknown> | undefined;
@@ -1073,6 +1160,7 @@ export function registerReadTools(
         })
         .filter(({ m, items }) => !needle || m.name.toLowerCase().includes(needle) || items.length > 0);
 
+      const anyRequirement = modules.some((m) => (m.items ?? []).some((i) => i.completion_requirement));
       const allDone = modules.length > 0 && modules.every((m) => m.state === "completed" || !(m.items ?? []).some((i) => i.completion_requirement));
       return compact({
         course: `${c.course_code} — ${c.name}`,
@@ -1080,12 +1168,18 @@ export function registerReadTools(
         note: modules.length === 0
           ? "This course has no modules the student can see (or the Modules page is hidden)."
           : !next
-            ? allDone
-              ? "Every module requirement is complete."
-              : "Nothing to do in the unlocked modules; the remaining modules are locked."
+            ? !anyRequirement
+              // Not "all complete" when nothing was ever required (issue #24).
+              ? "These modules have no completion requirements, so there's no next step to track; see each " +
+                "item's submitted/missing flags, or use get_upcoming for due work."
+              : allDone
+                ? "Every module requirement is complete."
+                : "Nothing to do in the unlocked modules; the remaining modules are locked."
             : undefined,
-        modules: shown.map(({ m, items }) =>
-          compact({
+        modules: shown.map(({ m, items }) => {
+          // A finished module is mostly noise (issue #12): keep it short unless asked or searched for.
+          const brief = m.state === "completed" && !include_completed && !needle && !items.some((i) => itemOut(i).missing);
+          return compact({
             id: m.id,
             name: m.name,
             state: m.state,
@@ -1093,9 +1187,10 @@ export function registerReadTools(
             prerequisites: m.prerequisite_module_ids?.length ? m.prerequisite_module_ids.map((id) => names.get(id) ?? `module ${id}`) : undefined,
             in_order: m.require_sequential_progress || undefined,
             completed: date(m.completed_at),
-            items: items.map(itemOut),
-          }),
-        ),
+            item_count: brief ? items.length : undefined,
+            items: brief ? undefined : items.map(itemOut),
+          });
+        }),
       });
     }),
   );
@@ -1287,7 +1382,7 @@ export function registerReadTools(
         return { course: label, file: info, note: file.lock_explanation ? htmlToText(file.lock_explanation, 500) : "This file is locked." };
       }
       if (kind === "unsupported") {
-        return { course: label, file: info, note: `Can't read ${file["content-type"] ?? "this type of file"} yet; open it with the url.` };
+        return { course: label, file: info, note: `Can't read ${friendlyType(file)} yet; open it with the url.` };
       }
       if (file.size !== undefined && file.size > MAX_FILE_BYTES) {
         return { course: label, file: info, note: `Too big to read here (over ${humanSize(MAX_FILE_BYTES)}); open it with the url.` };
@@ -1318,9 +1413,140 @@ function findItem(items: GradeItem[], id: number | undefined, name: string | und
   );
 }
 
+interface ThreadEntry {
+  id: number;
+  replyTo?: number;
+  depth: number;
+  /** Index of the top-level thread the entry belongs to. */
+  thread: number;
+  userId?: number;
+  mine: boolean;
+  createdAt?: string;
+  html?: string | null;
+  text: string;
+}
+
+const MAX_REPLIES = 150;
+const MAX_REPLY_CHARS = 30_000;
+const REPLY_CAP = 1500;
+const MIN_REPLY_CAP = 300;
+
+/**
+ * A discussion's replies in thread order (issue #26). Entries Canvas hasn't folded into the cached view yet
+ * (new_entries) are attached to their parent. When the thread is too long, long replies are shortened first
+ * (down to MIN_REPLY_CAP), then whole threads are left out from the end, so the replies shown have no gaps.
+ */
+export function threadReplies(view: DiscussionView | undefined, me: { id: number } | undefined, mineOnly: boolean) {
+  const top: DiscussionEntry[] = [...(view?.view ?? [])];
+  const known = new Map<number, DiscussionEntry>();
+  const index = (list: DiscussionEntry[] | undefined) => {
+    for (const e of list ?? []) {
+      known.set(e.id, e);
+      index(e.replies);
+    }
+  };
+  index(top);
+  for (const e of view?.new_entries ?? []) {
+    if (known.has(e.id)) continue;
+    const parent = e.parent_id != null ? known.get(e.parent_id) : undefined;
+    if (parent) parent.replies = [...(parent.replies ?? []), e];
+    else top.push(e);
+    known.set(e.id, e);
+  }
+
+  const flat: ThreadEntry[] = [];
+  let thread = 0;
+  const walk = (list: DiscussionEntry[] | undefined, depth: number, replyTo?: number) => {
+    for (const e of list ?? []) {
+      if (depth === 0) thread++;
+      if (!e.deleted) {
+        flat.push({
+          id: e.id, replyTo, depth, thread, userId: e.user_id, mine: me !== undefined && e.user_id === me.id,
+          createdAt: e.created_at, html: e.message, text: "",
+        });
+      }
+      walk(e.replies, depth + 1, e.id);
+    }
+  };
+  walk(top, 0);
+  const postedByMe = flat.some((r) => r.mine);
+
+  let pool = flat;
+  if (mineOnly) {
+    const mine = flat.filter((r) => r.mine);
+    const mineIds = new Set(mine.map((r) => r.id));
+    const answered = new Set(mine.map((r) => r.replyTo).filter((id): id is number => id !== undefined));
+    // The student's posts, replies to them, and the posts they replied to (for context).
+    pool = flat.filter((r) => r.mine || (r.replyTo !== undefined && mineIds.has(r.replyTo)) || answered.has(r.id));
+  }
+
+  const full = pool.map((r) => ({ ...r, text: htmlToText(r.html, 100_000) ?? "" }));
+  // A clipped reply is cap characters plus "…".
+  const size = (cap: number) => full.slice(0, MAX_REPLIES).reduce((n, r) => n + (r.text.length > cap ? cap + 1 : r.text.length), 0);
+  // The largest per-reply cap that fits, so short replies keep their share of the budget.
+  let cap = REPLY_CAP;
+  if (size(cap) > MAX_REPLY_CHARS) {
+    let lo = MIN_REPLY_CAP;
+    let hi = REPLY_CAP;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (size(mid) <= MAX_REPLY_CHARS) lo = mid;
+      else hi = mid - 1;
+    }
+    cap = lo;
+  }
+  const shortened = full.filter((r) => r.text.length > cap).length;
+  const sized = full.map((r) => ({ ...r, text: clip(r.text, cap) }));
+
+  // Whole threads, in order, while they fit; a first thread too big for the budget is cut at an entry.
+  const entries: ThreadEntry[] = [];
+  let chars = 0;
+  for (let i = 0; i < sized.length; ) {
+    const t = sized[i].thread;
+    let j = i;
+    while (j < sized.length && sized[j].thread === t) j++;
+    const group = sized.slice(i, j);
+    const groupChars = group.reduce((n, r) => n + r.text.length, 0);
+    if (entries.length + group.length <= MAX_REPLIES && chars + groupChars <= MAX_REPLY_CHARS) {
+      entries.push(...group);
+      chars += groupChars;
+      i = j;
+      continue;
+    }
+    if (entries.length === 0) {
+      for (const r of group) {
+        if (entries.length >= MAX_REPLIES || chars + r.text.length > MAX_REPLY_CHARS) break;
+        entries.push(r);
+        chars += r.text.length;
+      }
+    }
+    break;
+  }
+
+  const notes: string[] = [];
+  if (entries.length < sized.length) {
+    notes.push(`Showing ${entries.length} of ${sized.length} replies; later threads are left out. Open the url to read them all, or use mine_only.`);
+  }
+  if (shortened) notes.push(`${shortened} long repl${shortened === 1 ? "y was" : "ies were"} shortened to ${cap} characters.`);
+  return {
+    entries,
+    total: sized.length,
+    all: flat.length,
+    postedByMe,
+    note: notes.length ? notes.join(" ") : undefined,
+  };
+}
+
 /** True when a grader filled in at least one rubric criterion. */
 function hasAssessment(s: Submission): boolean {
   return Object.values(s.rubric_assessment ?? {}).some((r) => r && (r.points != null || r.rating_id || r.comments));
+}
+
+/** A person's name, preferring short_name or sortable_name when Canvas's name is just a login email. */
+function displayName(u: CourseUser): string {
+  const isEmail = (s: string | null | undefined) => !s || /^[^\s@]+@[^\s@]+$/.test(s.trim());
+  if (!isEmail(u.name)) return u.name;
+  return [u.short_name, u.sortable_name].find((n) => !isEmail(n)) ?? u.name;
 }
 
 const STAFF_ROLE: Record<string, "teacher" | "ta"> = { TeacherEnrollment: "teacher", TaEnrollment: "ta" };

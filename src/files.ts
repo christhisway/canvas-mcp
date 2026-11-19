@@ -7,11 +7,37 @@ import type { CanvasFile, Course } from "./types.js";
 /** Largest file read_file will download. */
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 /** Most text returned per call; PDFs stop at a page boundary so the next call can carry on. */
-export const MAX_TEXT_CHARS = 40_000;
+export const MAX_TEXT_CHARS = 20_000;
 
 const TEXT_EXTENSIONS = /\.(txt|md|markdown|csv|tsv|json|xml|ya?ml|py|java|c|h|cpp|hpp|cs|js|ts|tsx|jsx|rb|go|rs|sql|r|m|sh|tex|ipynb)$/i;
 
 type Kind = "pdf" | "html" | "text" | "unsupported";
+
+/** A name a person would use for a file type read_file can't read (issue #21). */
+export function friendlyType(file: CanvasFile): string {
+  const type = (file["content-type"] ?? "").toLowerCase();
+  const name = (file.display_name ?? file.filename ?? "").toLowerCase();
+  const ext = name.match(/\.([a-z0-9]+)$/)?.[1] ?? "";
+  if (type.includes("wordprocessingml") || type === "application/msword" || ["doc", "docx"].includes(ext)) return "Word documents";
+  if (type.includes("presentationml") || type === "application/vnd.ms-powerpoint" || ["ppt", "pptx"].includes(ext)) return "PowerPoint files";
+  if (type.includes("spreadsheetml") || type === "application/vnd.ms-excel" || ["xls", "xlsx"].includes(ext)) return "Excel spreadsheets";
+  if (type.startsWith("image/")) return "images";
+  if (type.startsWith("video/")) return "videos";
+  if (type.startsWith("audio/")) return "audio files";
+  if (type === "application/zip" || ext === "zip") return "zip files";
+  return ext ? `.${ext} files` : "this type of file";
+}
+
+// Control characters (except tab and newline) that some PDFs carry in their text layer.
+const CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
+
+/** True for a page that's mostly short labels, as maps, charts and diagrams are. */
+function looksLikeDiagram(text: string): boolean {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 40) return false;
+  const short = lines.filter((l) => l.length <= 12).length;
+  return short / lines.length >= 0.7;
+}
 
 export function fileKind(file: CanvasFile): Kind {
   const type = (file["content-type"] ?? "").toLowerCase();
@@ -79,13 +105,16 @@ export async function pdfText(bytes: Uint8Array, fromPage = 1, toPage?: number):
     let length = 0;
     let stoppedAt: number | undefined;
     let anyText = false;
+    const diagrams: number[] = [];
     for (let n = fromPage; n <= last; n++) {
       const content = await (await pdf.getPage(n)).getTextContent();
       const pageText = content.items
         .map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : "") : ""))
         .join("")
+        .replace(CONTROL, "")
         .replace(/[ \t]+\n/g, "\n")
         .trim();
+      if (looksLikeDiagram(pageText)) diagrams.push(n);
       if (pageText) anyText = true;
       const chunk = `[page ${n}]\n${pageText}`;
       if (length + chunk.length > MAX_TEXT_CHARS && parts.length > 0) {
@@ -97,10 +126,15 @@ export async function pdfText(bytes: Uint8Array, fromPage = 1, toPage?: number):
       length += chunk.length;
     }
     const end = stoppedAt ? stoppedAt - 1 : last;
-    let note: string | undefined;
-    if (stoppedAt) note = `Stopped after page ${end} to keep the reply short; call again with from_page ${stoppedAt} for the rest.`;
-    else if (!anyText) note = "These pages have no text layer (probably scanned images), so there's nothing to extract.";
-    return { text: parts.join("\n\n"), total_pages: total, pages_returned: `${fromPage}-${end}`, note };
+    const notes: string[] = [];
+    if (stoppedAt) notes.push(`Stopped after page ${end} to keep the reply short; call again with from_page ${stoppedAt} for the rest.`);
+    else if (end < total) notes.push(`Pages ${end + 1}-${total} weren't read; call again with from_page ${end + 1} for the rest.`);
+    if (!anyText) notes.push("These pages have no text layer (probably scanned images), so there's nothing to extract.");
+    const shown = diagrams.filter((n) => n <= end);
+    if (shown.length) {
+      notes.push(`Page${shown.length > 1 ? "s" : ""} ${shown.join(", ")} look${shown.length > 1 ? "" : "s"} like a map or diagram; the text is its labels only.`);
+    }
+    return { text: parts.join("\n\n"), total_pages: total, pages_returned: `${fromPage}-${end}`, note: notes.length ? notes.join(" ") : undefined };
   } finally {
     await task.destroy();
   }

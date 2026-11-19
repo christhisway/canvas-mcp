@@ -320,8 +320,22 @@ try {
     assert.equal(out[0].final_score, 57.8);
     const all = parse(await call("list_courses", { include_past: true }));
     assert.deepEqual(all.map((c: any) => [c.code, c.ended ?? false]), [
-      ["CS 240", false], ["PHIL 230", false], ["GEOL 101", true], ["HIST 105", true],
+      ["CS 240", false], ["PHIL 230", false], ["GEOL 101", true], ["HIST 105", true], ["COMP 110", true], ["COMP 210", true],
     ]);
+  });
+
+  await check("courses with a concluded enrollment resolve by code; a TA course gets a plain message", async () => {
+    const old = parse(await call("get_grades", { course: "COMP 110" }));
+    assert.match(old.course, /COMP 110/);
+    const mail = parse(await call("list_messages", { course: "COMP 110" }));
+    assert.match(mail.note, /No conversations in inbox for this course/);
+    for (const tool of ["get_feedback", "get_grades", "grade_whatif", "recently_graded"]) {
+      const r: any = await call(tool, { course: "COMP 210" });
+      assert.equal(r.isError, true, tool);
+      assert.match(r.content[0].text, /enrolled in COMP 210 as a TA, not a student/, tool);
+    }
+    const unknown: any = await call("get_grades", { course: "biology" });
+    assert.match(unknown.content[0].text, /including past courses.*A course id works/);
   });
 
   await check("a past course still resolves by name or id; announcements skip it", async () => {
@@ -366,7 +380,7 @@ try {
   await check("resolves a course by code and lists assignments", async () => {
     const out = parse(await call("list_assignments", { course: "cs240" }));
     assert.equal(out.course_id, 101);
-    assert.equal(out.assignments.length, 6);
+    assert.equal(out.assignments.length, 7);
   });
 
   await check("ambiguous / unknown course gives a helpful error", async () => {
@@ -465,6 +479,13 @@ try {
     assert.ok(mock.state.eventRequests.every((codes) => !codes.includes("course_303")));
     const exams = parse(await call("list_events", { days_ahead: 60, days_back: 7, search: "exam" }));
     assert.deepEqual(exams.events.map((e: any) => e.title), ["Review session", "Midterm exam", "Final exam"]);
+    // An exam that's a quiz is a calendar assignment (issue #23); search includes those.
+    const finals = parse(await call("list_events", { days_ahead: 60, search: "final" }));
+    assert.deepEqual(finals.events.map((e: any) => [e.title, e.type, e.assignment_id]), [["Final", "quiz", 29], ["Final exam", undefined, undefined]]);
+    const plain = parse(await call("list_events", { course: "PHIL 230", days_ahead: 60 }));
+    assert.ok(plain.events.every((e: any) => e.type === undefined), "assignments only when asked or searching");
+    const empty = parse(await call("list_events", { course: "CS 240", days_ahead: 0, days_back: 0 }));
+    assert.match(empty.note, /include_assignments/);
     const phil = parse(await call("list_events", { course: "philosophy", days_ahead: 3 }));
     assert.deepEqual(phil.events.map((e: any) => e.title), ["Office hours"]);
     assert.deepEqual(mock.state.eventRequests.at(-1), ["course_202"]);
@@ -472,7 +493,7 @@ try {
 
   await check("list_discussions: graded topic with due date and posted, required-post topic not posted", async () => {
     const out = parse(await call("list_discussions", { course: "PHIL 230" }));
-    assert.deepEqual(out.discussions.map((d: any) => [d.id, d.posted]), [[31, true], [32, false], [33, undefined], [34, undefined]]);
+    assert.deepEqual(out.discussions.map((d: any) => [d.id, d.posted]), [[31, true], [32, false], [33, undefined], [34, undefined], [35, undefined]]);
     const [graded, zombies] = out.discussions;
     assert.equal(graded.graded, true);
     assert.equal(graded.points, 10);
@@ -488,7 +509,7 @@ try {
     assert.match(out.prompt, /understand/);
     assert.equal(out.posted, true);
     assert.deepEqual(out.replies.map((r: any) => [r.id, r.depth, r.author, r.reply_to]), [
-      [401, 0, "Alex Kim", undefined], [403, 1, "you", 401], [404, 2, "Alex Kim", 403], [402, 0, "Jordan Lee", undefined],
+      [401, 0, "Alex Kim", undefined], [403, 1, "you", 401], [404, 2, "Alex Kim", 403], [406, 2, "Jordan Lee", 403], [402, 0, "Jordan Lee", undefined],
     ]);
     assert.match(out.replies[1].text, /SYSTEM|system/);
     assert.equal(out.note, undefined);
@@ -503,6 +524,20 @@ try {
     assert.equal(long.replies.at(-1).text, "Post 149");
     assert.match(long.note, /Showing 150 of 200 replies/);
     assert.equal(empty.posted, false);
+  });
+
+  await check("get_discussion: mine_only, and long threads shorten replies before dropping whole threads", async () => {
+    const mine = parse(await call("get_discussion", { course: "PHIL 230", topic_id: 31, mine_only: true }));
+    // The post the student answered, their reply, and both replies to it.
+    assert.deepEqual(mine.replies.map((r: any) => r.id), [401, 403, 404, 406]);
+    const none = parse(await call("get_discussion", { course: "PHIL 230", topic_id: 34, mine_only: true }));
+    assert.match(none.note, /hasn't posted/);
+    const long = parse(await call("get_discussion", { course: "PHIL 230", topic_id: 35 }));
+    assert.equal(long.replies.length, 80, "every reply fits once long ones are shortened");
+    const cap = Number(long.note.match(/40 long replies were shortened to (\d+) characters/)[1]);
+    assert.ok(cap >= 700 && cap < 1500, `cap ${cap} should use the short replies' leftover budget`);
+    assert.ok(long.replies.every((r: any) => r.text.length <= cap + 1));
+    assert.deepEqual(long.replies.slice(0, 2).map((r: any) => [r.depth, r.reply_to]), [[0, undefined], [1, 2000]]);
   });
 
   await check("list_modules: order, progress, prerequisites, what's next, and a large module's items", async () => {
@@ -520,7 +555,16 @@ try {
     assert.deepEqual(week1.items.map((i: any) => [i.title, i.type, i.requirement, i.done]), [
       ["Readings", "heading", undefined, undefined], ["Factory reading", "Page", "view", true],
       ["Factory Pattern Writeup", "Assignment", "submit", false], ["Week 1 quiz", "Quiz", "score at least 8", false],
+      ["Observer Pattern Writeup", "Assignment", undefined, undefined],
     ]);
+    // Submission status from the assignments list (issue #24): the quiz by quiz_id, the writeup by id.
+    assert.deepEqual(week1.items.slice(3).map((i: any) => [i.submitted, i.missing]), [[true, undefined], [undefined, true]]);
+    // A completed module is shortened unless asked for (issue #12).
+    assert.deepEqual(out.modules[0], { id: 1, name: "Syllabus & Start Here", state: "completed", completed: out.modules[0].completed, item_count: 3 });
+    const full = parse(await call("list_modules", { course: "CS 240", include_completed: true }));
+    assert.equal(full.modules[0].items.length, 3);
+    const noReqs = parse(await call("list_modules", { course: "GEOL 101" }));
+    assert.match(noReqs.note, /no completion requirements/);
     assert.equal(week2.in_order, true);
     assert.match(week2.unlocks, /\d{4}/);
     assert.equal(week2.items.length, 60);
@@ -661,6 +705,44 @@ try {
     assert.match(badLetter.content[0].text, /isn't a percentage or a letter/);
   });
 
+  await check("grade_whatif: an account-level letter scale, projected groups, and nothing left to do", async () => {
+    const geo = parse(await call("grade_whatif", { course: "GEOL 101", target: "A" }));
+    assert.equal(geo.letter_scale, 'course ("UNC scale")');
+    assert.equal(geo.notes, undefined);
+    assert.match(geo.target.note, /No ungraded work is left in Canvas/);
+    const what = parse(await call("grade_whatif", { course: "CS 240", hypotheticals: [{ name: "factory", score: 10 }] }));
+    // Current view: (17.8 + 10) / 40 with the missing writeup ungraded; Participation leaves out the omitted quiz.
+    assert.deepEqual(what.groups.map((g: any) => g.projected_percent), [69.5, 100]);
+    const needed = parse(await call("grade_whatif", { course: "CS 240", target: "C" }));
+    assert.match(needed.target.note, /81% .*rounded up/);
+  });
+
+  await check("assignment instructions keep table rows together", async () => {
+    const out = parse(await call("get_assignment", { course: "GEOL 101", assignment_id: 31 }));
+    assert.equal(out.instructions, "Albums to compare:\n\nAlbum | Year\nBlue | 1971\nHejira | 1976");
+  });
+
+  await check("course_people merges duplicate staff and avoids email-only names", async () => {
+    const out = parse(await call("course_people", { course: "PHIL 230", role: "teacher" }));
+    assert.deepEqual(out.staff, [{ name: "Prof. B", role: "teacher", email: "b@example.edu" }]);
+    const tas = parse(await call("course_people", { course: "PHIL 230", role: "ta" }));
+    assert.deepEqual(tas.staff.map((p: any) => p.name), ["Casey Ng"]);
+  });
+
+  await check("read_file: friendly type names, map pages flagged, control characters stripped", async () => {
+    const doc = parse(await call("read_file", { course: "GEOL 101", file_id: 603 }));
+    assert.match(doc.note, /Can't read Word documents yet/);
+    const map = parse(await call("read_file", { course: "GEOL 101", file_id: 602 }));
+    assert.match(map.note, /Page 1 looks like a map or diagram/);
+    assert.doesNotMatch(map.text, /\u0007/);
+    assert.match(map.text, /Kgr0/);
+  });
+
+  await check("replies are minified JSON", async () => {
+    const r: any = await call("list_courses");
+    assert.doesNotMatch(r.content[0].text, /\n/);
+  });
+
   await check("announcements across all courses", async () => {
     const out = parse(await call("list_announcements", {}));
     assert.equal(out[0].course, "PHIL 230");
@@ -720,14 +802,25 @@ try {
   await check("read_file stops a long PDF at a page boundary and continues from_page", async () => {
     const first = parse(await call("read_file", { course: "CS 240", file_id: 502 }));
     assert.equal(first.total_pages, 6);
-    assert.ok(first.text.length <= 40_000);
-    const next = Number(first.note.match(/from_page (\d+)/)[1]);
+    assert.ok(first.text.length <= 20_000);
+    let next = Number(first.note.match(/from_page (\d+)/)[1]);
     assert.ok(next > 1 && next <= 6);
     assert.equal(first.pages_returned, `1-${next - 1}`);
-    const rest = parse(await call("read_file", { course: "CS 240", file_id: 502, from_page: next }));
-    assert.equal(rest.pages_returned, `${next}-6`);
+    // Follow the notes to the end, as the model would.
+    let rest: any;
+    for (let calls = 0; calls < 6; calls++) {
+      rest = parse(await call("read_file", { course: "CS 240", file_id: 502, from_page: next }));
+      assert.equal(rest.pages_returned.split("-")[0], String(next));
+      if (!rest.note) break;
+      next = Number(rest.note.match(/from_page (\d+)/)[1]);
+    }
+    assert.equal(rest.pages_returned.split("-")[1], "6");
     assert.match(rest.text, /Observer pattern part 6/);
     assert.equal(rest.note, undefined);
+    // Asking for fewer pages still says there's more (issue #21).
+    const one = parse(await call("read_file", { course: "CS 240", file_id: 502, to_page: 1 }));
+    assert.equal(one.pages_returned, "1-1");
+    assert.match(one.note, /Pages 2-6 weren't read; call again with from_page 2/);
   });
 
   await check("read_file returns only details for unsupported, locked and oversized files", async () => {

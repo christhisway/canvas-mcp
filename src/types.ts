@@ -25,6 +25,7 @@ export interface Course {
   html_url?: string;
   apply_assignment_group_weights?: boolean;
   grading_standard_id?: number | null;
+  account_id?: number;
 }
 
 export interface SubmissionComment {
@@ -92,6 +93,10 @@ export interface Assignment {
   rubric?: RubricCriterion[];
   grading_type?: string;
   submission?: Submission;
+  /** Set when the assignment is a classic quiz. */
+  quiz_id?: number;
+  /** Set when the assignment is a graded discussion. */
+  discussion_topic?: { id: number } | null;
 }
 
 export interface AssignmentGroup {
@@ -160,6 +165,7 @@ export interface DiscussionEntry {
   message?: string | null;
   created_at?: string;
   deleted?: boolean;
+  parent_id?: number | null;
   replies?: DiscussionEntry[];
 }
 
@@ -167,6 +173,8 @@ export interface DiscussionEntry {
 export interface DiscussionView {
   participants?: Array<{ id: number; display_name: string }>;
   view?: DiscussionEntry[];
+  /** Entries posted since Canvas cached the view, flat with parent_id. */
+  new_entries?: DiscussionEntry[];
 }
 
 export interface CanvasFile {
@@ -233,6 +241,8 @@ export interface Module {
 export interface CourseUser {
   id: number;
   name: string;
+  short_name?: string | null;
+  sortable_name?: string | null;
   /** Only when the student is allowed to see it (include[]=email). */
   email?: string | null;
   pronouns?: string | null;
@@ -262,6 +272,8 @@ export interface CalendarEvent {
   context_code?: string;
   workflow_state?: string;
   html_url?: string;
+  /** Set on type=assignment calendar entries (an assignment's due date). */
+  assignment?: Assignment;
 }
 
 export interface ConversationAttachment {

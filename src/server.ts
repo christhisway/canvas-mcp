@@ -4,17 +4,11 @@ import type { Config } from "./config.js";
 import { CourseDirectory } from "./courses.js";
 import { registerReadTools } from "./tools/read.js";
 
-const INSTRUCTIONS = `Read-only tools for the student's own Canvas LMS account. Dates are shown in the student's time zone.
-Use get_upcoming for "what's due" questions, and list_events for exams and office hours, which often
-appear only on the calendar; courses can be named by code or name instead of id.
-Use read_file to read lecture slides, handouts and other course files.
-Use course_people to find a course's instructors, TAs and the student's group members.
-Use get_feedback for "where did I lose points" questions.
-Use grade_whatif for "what do I need to get a B+" or "what if I get 85 on the final" questions.
-Use recently_graded for "what got graded this week", list_modules for "what's next in the course",
-list_discussions/get_discussion for discussion posts, and list_messages/get_message for the Canvas inbox.
-These tools can't submit or change anything in Canvas. To hand something in, give the student the
-assignment's url so they can submit it themselves.`;
+// Kept short: it's sent with every message, and each tool's description already says when to use it (issue #12).
+const INSTRUCTIONS = `Read-only tools for the student's own Canvas LMS account: they can't submit or change anything, so
+to hand work in, give the student the assignment's url. Dates are in the student's time zone, and courses can be
+named by code or name instead of id. Exam dates can be calendar events, assignments or only in the syllabus:
+try list_events with search (which includes assignments), then get_syllabus.`;
 
 /** Long-lived state shared by every request (the HTTP transport is stateless). */
 export function createShared(config: Config) {
