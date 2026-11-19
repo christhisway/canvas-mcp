@@ -17,13 +17,13 @@ It runs as a Node server on a Mac at home, published over HTTPS with Tailscale F
 | `get_grades` | Current and final score, assignment-group weights and drop rules, graded scores, missing work |
 | `grade_whatif` | Projects a grade from assumed scores, or the average you need on the remaining work for a target ("B+", "87%"); follows group weights, drop rules, excused work and the course's letter scale |
 | `recently_graded` | What got graded in the last N days across current courses (or one), with score and whether there's feedback to read |
-| `list_events` | Calendar events (exams, office hours, review sessions, your own events) in a date window, optionally one course or a search |
+| `list_events` | Calendar events (exams, office hours, review sessions, your own events) in a date window, optionally one course or a search; with a search, assignment due dates too |
 | `list_discussions` | Discussion topics in a course: due date and points when graded, whether you've posted, whether you must post to see replies, unread counts |
-| `get_discussion` | One discussion's prompt and its replies in thread order, with authors and dates (long threads are cut off with a note) |
-| `list_modules` | A course's modules in order with your progress, unlock dates, prerequisites and items (due dates, completion requirements), plus the next required item to do |
+| `get_discussion` | One discussion's prompt and its replies in thread order, with authors and dates (long replies shortened, then later threads left out, with a note), or just your posts and the replies around them |
+| `list_modules` | A course's modules in order with your progress, unlock dates, prerequisites and items (due dates, completion requirements), submitted/missing status, plus the next required item to do (completed modules shortened) |
 | `list_messages` | Canvas inbox conversations (inbox, unread, sent, archived, starred; optionally one course) with participants, unread flag and a preview |
 | `get_message` | One inbox conversation in full with attachment links; never marks it as read |
-| `list_announcements` | Recent announcements from one or all courses |
+| `list_announcements` | Recent announcements from one or all courses (previews across courses, capped by `limit`) |
 | `get_syllabus` | Syllabus page as text (long ones in parts), with files it links to; if it's empty, a page, file or module item named "syllabus" |
 | `read_file` | Text of a course file (PDF slides and handouts, plain text, code, HTML), found by name or id; long PDFs come back a few pages at a time |
 

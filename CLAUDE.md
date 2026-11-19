@@ -49,7 +49,7 @@ src/
   revoke-grants.ts   wipes all grants (used by deploy/ctl.sh revoke)
 deploy/ctl.sh        install/update/restart/status/logs/revoke/funnel on the server (launchd agent local.canvas-mcp)
 test/grades.test.ts  unit checks for src/grades.ts (no server); 11 checks
-test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + CIMD doc + file storage); 49 checks
+test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + CIMD doc + file storage); 56 checks
 test/make-pdf.ts     builds small text PDFs for the mock, so there are no binary fixtures
 test/oauth-client.ts plays Claude + the browser through the OAuth flow
 docs/architecture/   ADRs (decisions); index in README.md
@@ -85,7 +85,7 @@ The connector never writes to Canvas: see [ADR 9](docs/architecture/0009-read-on
 
 **Issue numbers:** "#1–#4" below are labels for the first real-Canvas fixes, made before the repo had GitHub issues. GitHub issues #1–#9 (opened 2026-11-19) were the planned new tools; all nine are built (#1 `read_file` through #9 `list_messages`).
 
-Verified (2026-11-19, mocks only; `npm test`, 11/11 unit + 49/49 smoke passing; `tsc` clean for `src` and `test`):
+Verified (2026-11-19, mocks only; `npm test`, 11/11 unit + 56/56 smoke passing; `tsc` clean for `src` and `test`):
 - Metadata and the 401 challenge.
 - DCR and CIMD sign-in through the consent page → Microsoft → callback → token.
 - Wrong PKCE verifier, missing client secret, and code reuse (which revokes the grant).
@@ -104,6 +104,15 @@ Verified (2026-11-19, mocks only; `npm test`, 11/11 unit + 49/49 smoke passing; 
 - GitHub #3 `get_feedback`: rubric criteria with points, rating and grader comment, submission comments with attachment links, finding an assignment by name (and listing several matches), the course-wide list of assignments with feedback, and an ungraded assignment.
 - GitHub #2 `grade_whatif`: matches Canvas's current and final score for a weighted mock course (default scale) and an unweighted one (drop-lowest where the best-ratio drop differs from the lowest percentage, an excused quiz, the course's own scale); target needed averages, an unreachable target, missing work counted as zero or not, hypotheticals by name, id and percentage. Unit checks also cover drop_highest, never_drop, weight scaling and extra-credit weights.
 - GitHub bugs from the live test (2026-11-19): #13/#14 `get_grades` uses `grades.ts` (a submission with no `score` key isn't a graded zero; drop rules and `omit_from_final_grade` match `grade_whatif`); #15 `scope=sent` reaches Canvas, with a fallback to conversations the student wrote in when it comes back empty; #16 more than 5 other participants become a count; #18 a planner checkmark doesn't make missing work done; #19 quizzes and discussions carry `assignment_id`; #20 `get_syllabus` continues with `from_char` and lists `/files/<id>` links as `linked_files`.
+- GitHub enhancements from the live test (2026-11-19):
+  - #17: courses with a concluded enrollment (`enrollment_state=completed`) resolve by code and show in `include_past`.
+  - #25: student-only tools say plainly when the enrollment is a TA or teacher one.
+  - #21 `read_file`: a note when `to_page` leaves pages unread, friendly type names, control characters stripped, map/diagram pages flagged.
+  - #23 `list_events`: includes calendar assignments (on with `search`).
+  - #22 `grade_whatif`: letter scale looked up by id (course, then account), `projected_percent` per group, and a note when nothing is left to grade.
+  - #24 `list_modules`: submitted/missing on items, a separate note when there are no requirements, completed modules shortened.
+  - #26: `get_discussion` merges `new_entries`, shortens long replies before dropping whole threads, and has `mine_only`; `course_people` merges duplicate staff and avoids email-only names; tables render as `a | b` rows.
+  - #12: JSON is minified, announcements are capped (`limit`, previews across courses), `read_file` returns 20k characters per call, and the server instructions are shorter.
 - Issues #1–#4: past-term courses left out but still resolvable, final score and missing work, the syllabus fallback (including hidden Files/Pages tabs), and undated assignments in `get_upcoming`.
 
 Working for real (2026-11-19): the connector is deployed and Claude has used the read tools in claude.ai against real Canvas. The #1–#4 changes came from that test and were deployed on 2026-11-19.
@@ -124,6 +133,8 @@ Not verified (needs the server and real accounts):
   - course entries with null names
   - #1: `list_courses` with `include_past: true`
   - #3: syllabus matches from pages and module items (only Files matches have been seen so far)
+  - GitHub #24: whether `GET /courses/:id/modules` creates module progressions for students ([ADR 11](docs/architecture/0011-canvas-side-effects-of-reads.md), Proposed).
+  - GitHub #17/#25: the shape of `/courses?enrollment_state=completed` (expected to carry `enrollments[].type`), and whether account-level grading standards are readable by students (#22).
   - GitHub #15: why real Canvas returned nothing for `scope=sent`. The cause wasn't found; the fallback (inbox + archived, filtered by `last_authored_message_at`) is what makes it work, and conversations the student started that nobody answered may not be in the inbox.
   - GitHub #9 inbox: that `auto_mark_as_read=false` is honoured (check that a message read through Claude stays unread in Canvas), `context_name` on real conversations, and the `filter[]=course_<id>` course filter.
   - GitHub #8 `list_modules`: real `state` values for students, `content_details` on quizzes and discussions, and whether Canvas really omits `items` for large modules or truncates them (both are handled).

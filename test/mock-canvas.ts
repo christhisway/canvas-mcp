@@ -55,6 +55,11 @@ export async function startMockCanvas() {
     "505": { id: 505, course_id: 101, display_name: "Exam 1 answers.pdf", type: "application/pdf", locked: true },
     "506": { id: 506, course_id: 101, display_name: "Lecture recording.pdf", type: "application/pdf", size: 30 * 1024 * 1024 },
     "507": { id: 507, course_id: 101, display_name: "Sneaky.pdf", type: "application/pdf", body: makePdf(["x"]), redirect: "http://intranet.example/secret" },
+    // A map: hundreds of short labels, plus a stray control character in the text layer (issue #21).
+    "602": { id: 602, course_id: 303, display_name: "Geologic map.pdf", type: "application/pdf", body: makePdf([
+      ["Geologic map of Orange County", ...Array.from({ length: 80 }, (_, i) => (i % 2 ? `${300 + i}` : `Kgr${i}\u0007`))].join("\n"),
+    ]) },
+    "603": { id: 603, course_id: 303, display_name: "Lab guide.docx", type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", body: Buffer.from("PK") },
     "601": { id: 601, course_id: 303, display_name: "Rock cycle handout.pdf", type: "application/pdf", body: makePdf(["Igneous, sedimentary, metamorphic"]) },
   };
   const fileJson = (req: express.Request, f: MockFile) => ({
@@ -110,18 +115,25 @@ export async function startMockCanvas() {
     // PHIL 230 counts total points, drops the lowest quiz, and has its own letter scale.
     { id: 202, name: "Philosophy of Mind", course_code: "PHIL 230", term: { name: "Fall 2026" }, apply_assignment_group_weights: false, grading_standard_id: 5, enrollments: [{ type: "student", computed_current_score: 83.75, computed_current_grade: "B", computed_final_score: 49.63, computed_final_grade: "F" }] },
     // Enrollments Canvas still calls "active" although the course is over (issue #1).
-    { id: 303, name: "Intro to Geology", course_code: "GEOL 101", term: { name: "Fall 2025", end_at: iso(-320) }, enrollments: [{ type: "student", computed_current_score: 91, computed_current_grade: "A-" }] },
+    { id: 303, name: "Intro to Geology", course_code: "GEOL 101", term: { name: "Fall 2025", end_at: iso(-320) }, account_id: 9, grading_standard_id: 77, apply_assignment_group_weights: false, enrollments: [{ type: "student", computed_current_score: 90, computed_current_grade: "B" }] },
     { id: 404, name: "World History", course_code: "HIST 105", concluded: true, term: { name: "Spring 2026" }, enrollments: [{ type: "student" }] },
   ];
 
+  // Concluded enrollments (enrollment_state=completed): an old course the student took (issue #17), and one
+  // where the account was a TA, so student-only endpoints refuse it (issue #25).
+  const completedCourses = [
+    { id: 505, name: "Intro Programming", course_code: "COMP 110", term: { name: "Fall 2024", end_at: iso(-700) }, enrollments: [{ type: "student", computed_current_score: 95 }] },
+    { id: 606, name: "Data Structures", course_code: "COMP 210", term: { name: "Spring 2025", end_at: iso(-550) }, enrollments: [{ type: "ta" }] },
+  ];
   app.get("/api/v1/courses", (req, res) => {
+    if (req.query.enrollment_state === "completed") return res.json(completedCourses);
     const base = `http://${req.headers.host}/api/v1/courses`;
     if (req.query.page === "2") return res.json(courses.slice(1));
     res.set("Link", `<${base}?page=2&per_page=1>; rel="next", <${base}?page=1>; rel="first"`);
     res.json([courses[0]]);
   });
   app.get("/api/v1/courses/:id", (req, res) => {
-    const c = courses.find((x) => String(x.id) === req.params.id);
+    const c = [...courses, ...completedCourses].find((x) => String(x.id) === req.params.id);
     if (!c) return res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
     // PHIL 230's page is too long for one reply; HIST 105's is nothing but file links (issue #20).
     const schedule = Array.from({ length: 300 }, (_, i) => `<p>Week ${i + 1}: reading and discussion of the assigned chapter.</p>`).join("");
@@ -163,7 +175,7 @@ export async function startMockCanvas() {
   app.get("/api/v1/courses/:cid/modules", (req, res) => {
     // GEOL 101 hides its Files tab, but a module still links a handout (read_file's fallback).
     if (req.params.cid === "303") {
-      return res.json([{ id: 2, name: "Week 3", items: [
+      return res.json([{ id: 2, name: "Week 3", state: "completed", completed_at: iso(0), items: [
         { id: 81, title: "Rock cycle handout", type: "File", content_id: 601, html_url: "https://canvas.test/courses/303/modules/items/81" },
       ] }]);
     }
@@ -183,7 +195,8 @@ export async function startMockCanvas() {
         { id: 74, position: 1, title: "Readings", type: "SubHeader" },
         { id: 75, position: 2, indent: 1, title: "Factory reading", type: "Page", page_url: "factory-reading", html_url: "https://canvas.test/courses/101/modules/items/75", completion_requirement: { type: "must_view", completed: true } },
         { id: 76, position: 3, title: "Factory Pattern Writeup", type: "Assignment", content_id: 11, html_url: "https://canvas.test/courses/101/modules/items/76", completion_requirement: { type: "must_submit", completed: false }, content_details: details ? { points_possible: 20, due_at: iso(2) } : undefined },
-        { id: 77, position: 4, title: "Week 1 quiz", type: "Quiz", html_url: "https://canvas.test/courses/101/modules/items/77", completion_requirement: { type: "min_score", min_score: 8, completed: false }, content_details: details ? { points_possible: 10 } : undefined },
+        { id: 78, position: 5, title: "Observer Pattern Writeup", type: "Assignment", content_id: 14, html_url: "https://canvas.test/courses/101/modules/items/78" },
+        { id: 77, position: 4, title: "Week 1 quiz", type: "Quiz", content_id: 88, html_url: "https://canvas.test/courses/101/modules/items/77", completion_requirement: { type: "min_score", min_score: 8, completed: false }, content_details: details ? { points_possible: 10 } : undefined },
       ] },
     ]);
   });
@@ -200,6 +213,7 @@ export async function startMockCanvas() {
   const assignments: Record<string, any> = {
     "11": { id: 11, course_id: 101, name: "Factory Pattern Writeup", description: "<p>Write 500 words on <em>factories</em>.</p>", due_at: iso(2), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], allowed_extensions: ["pdf"], allowed_attempts: -1, html_url: "https://canvas.test/courses/101/assignments/11" },
     "12": { id: 12, course_id: 101, name: "Reflection", description: "<p>Reflect.</p>", due_at: iso(-1), lock_at: null, unlock_at: null, points_possible: 5, submission_types: ["online_text_entry"], allowed_attempts: 1, html_url: "https://canvas.test/courses/101/assignments/12" },
+    "19": { id: 19, course_id: 101, name: "Week 1 quiz", description: null, due_at: iso(3), lock_at: null, unlock_at: null, points_possible: 10, submission_types: ["online_quiz"], quiz_id: 88, html_url: "https://canvas.test/courses/101/assignments/19" },
     "13": { id: 13, course_id: 101, name: "Portfolio link", description: null, due_at: iso(5), lock_at: null, unlock_at: null, points_possible: 10, submission_types: ["online_url"], html_url: "https://canvas.test/courses/101/assignments/13" },
     // No due date, so never on the planner (issue #4); one still to do, one already handed in.
     "15": { id: 15, course_id: 202, name: "Group report", description: null, due_at: null, lock_at: null, unlock_at: null, points_possible: 50, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/202/assignments/15" },
@@ -225,15 +239,19 @@ export async function startMockCanvas() {
     "26": { id: 26, course_id: 202, name: "Week 5: Chinese Room", description: null, due_at: iso(2), lock_at: null, unlock_at: null, points_possible: 10, submission_types: ["discussion_topic"], html_url: "https://canvas.test/courses/202/assignments/26" },
     // Left out of the grade (omit_from_final_grade), as practice quizzes often are (issue #14).
     "18": { id: 18, course_id: 101, name: "Practice quiz", description: null, due_at: iso(-25), lock_at: null, unlock_at: null, points_possible: 2, submission_types: ["online_quiz"], omit_from_final_grade: true, html_url: "https://canvas.test/courses/101/assignments/18" },
+    // GEOL 101's only assignment, already graded: nothing is left to do in Canvas.
+    "31": { id: 31, course_id: 303, name: "Lab 1", description: "<p>Albums to compare:</p><table><tr><th>Album</th><th>Year</th></tr><tr><td>Blue</td><td>1971</td></tr><tr><td>Hejira</td><td>1976</td></tr></table>", due_at: iso(-330), lock_at: null, unlock_at: null, points_possible: 10, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/303/assignments/31" },
     "14": { id: 14, course_id: 101, name: "Observer Pattern Writeup", description: null, due_at: iso(-4), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/101/assignments/14" },
   };
   const mySubs: Record<string, any> = {
     "11": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
     "12": { workflow_state: "graded", submitted_at: iso(-2), graded_at: iso(-1), score: 5, grade: "5", attempt: 1, submission_comments: [{ author_name: "TA", comment: "Nice work", created_at: iso(-1) }] },
+    "19": { workflow_state: "submitted", submitted_at: iso(-0.2), score: null, grade: null, attempt: 1 },
     "13": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
     // Past due, never handed in, not graded: invisible in the current score (issue #2).
     // Canvas sometimes leaves score out entirely rather than sending null (issue #13).
     "14": { workflow_state: "unsubmitted", submitted_at: null, grade: null, attempt: null, missing: true },
+    "31": { workflow_state: "graded", submitted_at: iso(-331), graded_at: iso(-329), score: 9, grade: "9", attempt: 1 },
     "18": { workflow_state: "graded", submitted_at: iso(-25), graded_at: iso(-24), score: 0, grade: "0", attempt: 1 },
     "15": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
     "26": { workflow_state: "submitted", submitted_at: iso(-1), score: null, grade: null, attempt: 1 },
@@ -264,7 +282,13 @@ export async function startMockCanvas() {
     res.json(a);
   });
   // course_people (GitHub #4). CS 240's teacher shows an email; its TA doesn't, as when Canvas hides it.
-  const people: Record<string, Array<{ id: number; name: string; email?: string; pronouns?: string; type: string; role: string }>> = {
+  const people: Record<string, Array<{ id: number; name: string; short_name?: string; email?: string; pronouns?: string; type: string; role: string }>> = {
+    // The same professor twice (two sections) and a TA whose name is a login email (issue #26).
+    "202": [
+      { id: 70, name: "Prof. B", type: "TeacherEnrollment", role: "TeacherEnrollment" },
+      { id: 71, name: "Prof. B", email: "b@example.edu", type: "TeacherEnrollment", role: "TeacherEnrollment" },
+      { id: 72, name: "cng@example.edu", short_name: "Casey Ng", type: "TaEnrollment", role: "TaEnrollment" },
+    ],
     "101": [
       { id: 50, name: "Dana Ortiz", email: "dortiz@example.edu", pronouns: "she/her", type: "TeacherEnrollment", role: "TeacherEnrollment" },
       { id: 51, name: "Sam Park", type: "TaEnrollment", role: "Lead TA" },
@@ -282,7 +306,7 @@ export async function startMockCanvas() {
       (people[req.params.cid] ?? [])
         .filter((p) => types.length === 0 || types.some((t) => typeName(t) === p.type))
         .map((p) => ({
-          id: p.id, name: p.name, pronouns: p.pronouns,
+          id: p.id, name: p.name, short_name: p.short_name, pronouns: p.pronouns,
           email: include.includes("email") ? p.email : undefined,
           enrollments: include.includes("enrollments") ? [{ type: p.type, role: p.role, course_id: Number(req.params.cid) }] : undefined,
         })),
@@ -320,6 +344,14 @@ export async function startMockCanvas() {
     state.eventRequests.push(codes);
     const start = String(req.query.start_date ?? "");
     const end = String(req.query.end_date ?? "9999");
+    if (req.query.type === "assignment") {
+      // An online final that's a quiz, so it's only a calendar *assignment* (issue #23).
+      const due = [
+        { id: "assignment_29", title: "Final", start_at: iso(20), end_at: iso(20), context_code: "course_202", html_url: "https://canvas.test/courses/202/assignments/29",
+          assignment: { id: 29, name: "Final", due_at: iso(20), points_possible: 100, submission_types: ["online_quiz"], is_quiz_assignment: true } },
+      ];
+      return res.json(due.filter((e) => codes.includes(e.context_code) && e.end_at >= start && e.start_at <= end));
+    }
     res.json(events.filter((e) => codes.includes(e.context_code) && e.end_at >= start && e.start_at <= end));
   });
 
@@ -329,6 +361,7 @@ export async function startMockCanvas() {
     "31": { id: 31, title: "Week 5: Chinese Room", message: "<p>Does the room <em>understand</em> Chinese?</p>", posted_at: iso(-6), assignment_id: 26, require_initial_post: false, user_can_see_posts: true, discussion_subentry_count: 4, unread_count: 2, last_reply_at: iso(-1), author: { display_name: "Prof. B" }, html_url: "https://canvas.test/courses/202/discussion_topics/31" },
     "32": { id: 32, title: "Week 6: Zombies", message: "<p>Could a zombie be conscious?</p>", posted_at: iso(-2), assignment_id: null, require_initial_post: true, user_can_see_posts: false, discussion_subentry_count: 5, unread_count: 0, last_reply_at: iso(0), author: { display_name: "Prof. B" }, html_url: "https://canvas.test/courses/202/discussion_topics/32" },
     "34": { id: 34, title: "Introductions", message: "<p>Say hi.</p>", posted_at: iso(-60), assignment_id: null, require_initial_post: false, user_can_see_posts: true, discussion_subentry_count: 200, unread_count: 0, last_reply_at: iso(-1), html_url: "https://canvas.test/courses/202/discussion_topics/34" },
+    "35": { id: 35, title: "Essay swap", message: "<p>Post your essay.</p>", posted_at: iso(-4), assignment_id: null, require_initial_post: false, user_can_see_posts: true, discussion_subentry_count: 80, unread_count: 0, last_reply_at: iso(-2), html_url: "https://canvas.test/courses/202/discussion_topics/35" },
     "33": { id: 33, title: "General Q&A", message: "<p>Ask anything.</p>", posted_at: iso(-30), assignment_id: null, require_initial_post: false, user_can_see_posts: true, discussion_subentry_count: 0, unread_count: 0, last_reply_at: null, html_url: "https://canvas.test/courses/202/discussion_topics/33" },
   };
   app.get("/api/v1/courses/:cid/discussion_topics", (req, res) => res.json(req.params.cid === "202" ? Object.values(topics) : []));
@@ -340,6 +373,16 @@ export async function startMockCanvas() {
   app.get("/api/v1/courses/:cid/discussion_topics/:tid/view", (req, res) => {
     if (req.params.tid === "32") return res.status(403).json({ errors: [{ message: "You must post before viewing replies" }] });
     if (req.params.tid === "33") return res.json({ participants: [], view: [] });
+    if (req.params.tid === "35") {
+      // 40 long top-level posts, each with a short reply: too long for one reply unless shortened.
+      return res.json({
+        participants: [{ id: 60, display_name: "Alex Kim" }, { id: 1, display_name: "Owner Student" }],
+        view: Array.from({ length: 40 }, (_, i) => ({
+          id: 2000 + i, user_id: 60, message: `<p>Essay ${i}: ${"words ".repeat(400)}</p>`, created_at: iso(-3),
+          replies: [{ id: 3000 + i, user_id: 1, message: `<p>Reply ${i}</p>`, created_at: iso(-2) }],
+        })),
+      });
+    }
     if (req.params.tid === "34") {
       return res.json({
         participants: [{ id: 60, display_name: "Alex Kim" }],
@@ -357,6 +400,8 @@ export async function startMockCanvas() {
         { id: 402, user_id: 61, message: "<p>Depends on what understanding is.</p>", created_at: iso(-2) },
         { id: 405, deleted: true, created_at: iso(-1) },
       ],
+      // Posted since Canvas cached the view: a reply to the student's post (issue #26).
+      new_entries: [{ id: 406, parent_id: 403, user_id: 61, message: "<p>Which system, though?</p>", created_at: iso(-0.5) }],
     });
   });
 
@@ -434,12 +479,19 @@ export async function startMockCanvas() {
         { id: 1, name: "Writeups", group_weight: 60, rules: {}, assignments: withSubs(["17", "11", "14"]) },
         { id: 2, name: "Participation", group_weight: 40, rules: {}, assignments: withSubs(["12", "18"]) },
       ],
+      "303": [{ id: 5, name: "Labs", group_weight: 0, rules: {}, assignments: withSubs(["31"]) }],
       "202": [
         { id: 3, name: "Quizzes", group_weight: 0, rules: { drop_lowest: 1 }, assignments: withSubs(["21", "22", "23", "24"]) },
         { id: 4, name: "Essays", group_weight: 0, rules: {}, assignments: withSubs(["25", "15", "16"]) },
       ],
     };
     res.json(groups[req.params.cid] ?? []);
+  });
+  // GEOL 101's scale is set at the account, so it isn't in the course's list (issue #22).
+  app.get("/api/v1/courses/:cid/grading_standards/:sid", (req, res) => res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] }));
+  app.get("/api/v1/accounts/:aid/grading_standards/:sid", (req, res) => {
+    if (req.params.aid !== "9" || req.params.sid !== "77") return res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
+    res.json({ id: 77, title: "UNC scale", grading_scheme: [["A", 0.93], ["B", 0.83], ["C", 0.73], ["D", 0.6], ["F", 0]].map(([name, value]) => ({ name, value })) });
   });
   app.get("/api/v1/courses/:cid/grading_standards", (req, res) => {
     if (req.params.cid !== "202") return res.json([]);
