@@ -8,15 +8,15 @@ It runs as a Node server on a Mac at home, published over HTTPS with Tailscale F
 
 | Tool | What it does |
 |---|---|
-| `list_courses` | Active courses with term and current grade |
-| `get_upcoming` | Your Canvas planner across all courses for a date window, with submitted/missing/graded status |
+| `list_courses` | Current courses with term, current and final grade (past-term courses on request) |
+| `get_upcoming` | Your Canvas planner across all courses for a date window, with submitted/missing/graded status, plus assignments with no due date |
 | `list_assignments` | Assignments in one course (filter by upcoming, overdue, unsubmitted, …) |
 | `get_assignment` | Instructions, dates, allowed submission types and extensions, your submission, grader comments |
-| `get_grades` | Overall score, assignment-group weights, graded scores |
+| `get_grades` | Current and final score, assignment-group weights, graded scores, missing work |
 | `list_announcements` | Recent announcements from one or all courses |
-| `get_syllabus` | Syllabus page as text |
+| `get_syllabus` | Syllabus page as text; if it's empty, a page, file or module item named "syllabus" |
 
-Courses can be named by code or name ("CS 240", "philosophy"), not just by numeric id.
+Courses can be named by code or name ("CS 240", "philosophy"), not just by numeric id. A course from a past term is found by name only when no current course matches.
 
 ## How it works
 
