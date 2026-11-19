@@ -37,6 +37,8 @@ export async function startMockCanvas() {
     conversationScopes: [] as string[],
     /** Answer scope=sent with nothing, as real Canvas did in issue #15. */
     sentScopeEmpty: false,
+    /** Leave last_authored_message_at out of conversation lists, as real Canvas did (2026-11-19). */
+    omitLastAuthored: false,
   };
 
   const now = Date.now();
@@ -446,6 +448,7 @@ export async function startMockCanvas() {
       .filter((v) => scope !== "sent" || v.messages.some((m) => m.author_id === 1))
       .filter((v) => scope !== "archived" && scope !== "starred")
       .map((v) => conversationJson(v, false))
+      .map((v) => (state.omitLastAuthored ? { ...v, last_authored_message_at: undefined } : v))
       .sort((a, b) => b.last_message_at.localeCompare(a.last_message_at));
     res.json(list.slice(0, Number(req.query.per_page ?? 10)));
   });

@@ -618,6 +618,21 @@ try {
     }
   });
 
+  await check("list_messages sent: checks message authors when Canvas leaves out last_authored_message_at", async () => {
+    mock.state.sentScopeEmpty = true;
+    mock.state.omitLastAuthored = true;
+    const markedBefore = mock.state.conversationsMarkedRead;
+    try {
+      const sent = parse(await call("list_messages", { scope: "sent" }));
+      assert.deepEqual(sent.conversations.map((v: any) => v.id), [70, 72]);
+      assert.match(sent.note, /written in/);
+      assert.equal(mock.state.conversationsMarkedRead, markedBefore, "checking authors must not mark anything read");
+    } finally {
+      mock.state.sentScopeEmpty = false;
+      mock.state.omitLastAuthored = false;
+    }
+  });
+
   await check("inbox: a class-wide message gives a count, not the class roster", async () => {
     const inbox = parse(await call("list_messages", {}));
     const office = inbox.conversations.find((v: any) => v.id === 73);
