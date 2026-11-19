@@ -1,12 +1,12 @@
 # CLAUDE.md: canvas-mcp
 
-A personal Canvas LMS MCP connector for the owner, a student who is comfortable with TypeScript. README.md has the user-facing setup and tool list. This file covers current state and gotchas.
+A personal Canvas LMS MCP connector for one student ("the owner"), who is comfortable with TypeScript. README.md has the user-facing setup and tool list. This file covers current state and gotchas. Personal details (who the owner is, their real courses) are in `CLAUDE.local.md`, which is gitignored; keep them out of committed files, because the repo is public.
 
-Repo: `christhisway/canvas-mcp` on GitHub. Its sibling is the owner's Microsoft To Do connector.
+Repo: `christhisway/canvas-mcp` on GitHub. Its sibling is the owner's Microsoft To Do connector, which shares the Azure app registration.
 
 ## The dev machine is not the server
 
-Code is written on one Mac and runs on another: an older Mac, used as a home server.
+Code is written on one Mac and runs on another: an older Mac used as a home server.
 
 - Never bake dev-machine paths, users or secrets into the repo.
 - `deploy/ctl.sh` works out every path on the server when it runs.
@@ -88,7 +88,7 @@ Verified (2026-11-19, mocks only; `npm test`, 25/25 passing; `tsc` clean for `sr
 - All 7 read tools against mock Canvas, and that every Canvas request is a GET.
 - Issues #1–#4: past-term courses left out but still resolvable, final score and missing work, the syllabus fallback (including hidden Files/Pages tabs), and undated assignments in `get_upcoming`.
 
-Working for real (the owner, 2026-11-19): the connector is deployed and Claude has used the read tools in claude.ai against real Canvas. The #1–#4 changes came from that test and aren't deployed yet.
+Working for real (2026-11-19): the connector is deployed and Claude has used the read tools in claude.ai against real Canvas. The #1–#4 changes came from that test and aren't deployed yet.
 
 Not verified (needs the server and real accounts):
 - Real Microsoft sign-in with the shared Azure app, and that the owner's `/me` email matches `ALLOWED_EMAILS`.
@@ -98,9 +98,10 @@ Not verified (needs the server and real accounts):
   - `get_upcoming` planner shapes for quizzes and discussions
   - assignment-group edge cases
   - course entries with null names
-  - #1: whether GEOL101 and CS240 have `concluded` or a past term `end_at`. A term with no end date still counts as current.
+  - #1: whether past courses have `concluded` or a past term `end_at`. A term with no end date still counts as current.
   - #3: `search_term` on files, pages and modules, and which tabs the school hides from students
-  - #4: whether the group report is really undated (`list_assignments` with `filter: "undated"`)
+  - #4: whether assignments missing from `get_upcoming` are really undated (`list_assignments` with `filter: "undated"`)
+  - The specific courses to check are in `CLAUDE.local.md`.
 - Tailscale Funnel on the server, and launchd.
   - `deploy/ctl.sh funnel` was only run here against a stand-in `tailscale` script; real Funnel output formats weren't checked.
   - Does Funnel forward the original Host header? Either way works, because loopback is allowed.
@@ -108,12 +109,13 @@ Not verified (needs the server and real accounts):
 
 ## Next steps (in order)
 
-1. **On the server**, as `devserver`, run `deploy/ctl.sh update` to deploy the #1–#4 changes.
+1. **On the server**, as `devserver`, in `~/connectors/canvas-mcp`: the history was rewritten on 2026-11-19, so `deploy/ctl.sh update` (`git pull --ff-only`) fails once. Run `git fetch origin && git reset --hard origin/main` first; it leaves the gitignored `.env` and `data/` alone. Then run `deploy/ctl.sh update` to deploy the #1–#4 changes.
 2. **Retest in claude.ai**:
-   - `list_courses` no longer lists GEOL101 or CS240; `include_past: true` shows them as ended.
-   - `get_grades` shows `final_score` and the missing work.
+   - `list_courses` leaves out past-term courses; `include_past: true` shows them as ended.
+   - `get_grades` shows `final_score` and missing work.
    - `get_syllabus` on a course whose syllabus page is empty.
-   - `get_upcoming` lists the group report under `no_due_date`.
+   - `get_upcoming` lists undated work under `no_due_date`.
+   - The real courses to try are in `CLAUDE.local.md`.
 3. **Confirm refresh works** more than an hour after connecting, if that hasn't been checked yet (look for `POST /token` in `deploy/ctl.sh logs` with no reconnect prompt).
 
 ## Possible later additions

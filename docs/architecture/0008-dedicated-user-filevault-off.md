@@ -5,7 +5,7 @@
 
 ## Context
 
-The server runs as a launchd agent, which only runs while a user is logged in ([ADR 2](0002-node-on-home-server.md)). To come back after a power cut or crash without anyone present, the Mac needs automatic login. macOS doesn't allow automatic login while FileVault is on, so the owner turned FileVault off.
+The server runs as a launchd agent, which only runs while a user is logged in ([ADR 2](0002-node-on-home-server.md)). To come back after a power cut or crash without anyone present, the Mac needs automatic login. macOS doesn't allow automatic login while FileVault is on, so FileVault was turned off.
 
 FileVault protects data only while the Mac is off, so turning it off doesn't change the internet-facing risk. The sign-in, the allowlist and the phone code are unaffected. What changes is physical access: anyone who powers the Mac on is logged in, and automatic login stores the user's password on disk in a recoverable form. What an attacker would find on the disk:
 

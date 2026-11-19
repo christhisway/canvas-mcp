@@ -5,3 +5,4 @@ dist/
 !.env.example
 data/
 .DS_Store
+CLAUDE.local.md

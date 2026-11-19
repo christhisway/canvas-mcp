@@ -5,7 +5,7 @@
 
 ## Context
 
-claude.ai calls connectors from Anthropic's servers, so the home server needs a stable public HTTPS hostname. The OAuth issuer and the Azure redirect URI are tied to that hostname. The Mac sits behind a home router, and the owner owns no domain. There were two candidates:
+claude.ai calls connectors from Anthropic's servers, so the home server needs a stable public HTTPS hostname. The OAuth issuer and the Azure redirect URI are tied to that hostname. The Mac sits behind a home router, and the owner has no domain. There were two candidates:
 
 - **Tailscale Funnel**
   - Free, no domain needed.

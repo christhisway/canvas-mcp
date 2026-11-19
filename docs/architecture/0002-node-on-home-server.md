@@ -5,7 +5,7 @@
 
 ## Context
 
-The original goal was for this connector to match the Microsoft To Do connector's stack and deployment, and to run on an older Mac (the home server). Those two goals turned out to conflict: the To Do connector runs on Cloudflare Workers, and its own decisions explicitly put off any home-server move.
+The original goal was for this connector to match the Microsoft To Do connector's stack and deployment, and to run on an older Mac used as a home server. Those two goals turned out to conflict: the To Do connector runs on Cloudflare Workers, and its own decisions explicitly put off any home-server move.
 
 Moving canvas-mcp to Workers would have required:
 

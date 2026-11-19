@@ -25,7 +25,7 @@ The connector could submit assignments through four tools (`list_submission_file
 
 ## Consequences
 
-- **Claude can't hand anything in.** It reads assignments and gives the owner the assignment's link to submit themselves.
+- **Claude can't hand anything in.** It reads assignments and gives the student the assignment's link to submit themselves.
 - **Deployment is shorter.** No ntfy topic, no submissions folder, and no iCloud Apple ID on the server user.
 - **The Canvas token still has full access.** Canvas personal tokens can't be scoped, so read-only is a property of the server's code, not the token. Someone with the disk still has a full token ([ADR 8](0008-dedicated-user-filevault-off.md)), and the token's semester expiry is still the main limit on that ([ADR 6](0006-canvas-personal-access-token.md)).
 - **Parts of earlier ADRs no longer apply, but their decisions stand:**

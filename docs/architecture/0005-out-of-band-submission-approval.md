@@ -5,17 +5,17 @@
 
 ## Context
 
-Submitting to Canvas can't be undone and can hurt the owner's grades. A model should never be able to submit on its own, even when asked by text injected into a page or file. A tool-permission prompt in Claude depends on client settings and is easy to approve without reading.
+Submitting to Canvas can't be undone and can hurt the student's grades. A model should never be able to submit on its own, even when asked by text injected into a page or file. A tool-permission prompt in Claude depends on client settings and is easy to approve without reading.
 
 ## Decision
 
-Submission is two steps, and the second needs a code that only reaches the owner's phone:
+Submission is two steps, and the second needs a code that only reaches the student's phone:
 
 1. **`prepare_submission` validates and stages.**
    - It checks the assignment: accepted types, allowed extensions, attempts left, and lock state. It warns on late submissions and resubmissions.
    - It stores the **exact payload server-side**. Files are read and sha256-hashed at this point.
-   - It sends a 6-digit code to the owner's phone via ntfy.
-2. **The code never appears in any tool result.** The model must ask the owner to type it.
+   - It sends a 6-digit code to the student's phone via ntfy.
+2. **The code never appears in any tool result.** The model must ask the student to type it.
 3. **`confirm_submission(pending_id, code)` submits only what was staged.**
    - Codes are single-use and expire after 15 minutes.
    - Three wrong codes cancel the submission.
