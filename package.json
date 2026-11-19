@@ -8,7 +8,7 @@
     "start": "node dist/http.js",
     "dev": "tsx watch src/http.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx test/smoke.ts",
+    "test": "tsx test/grades.test.ts && tsx test/smoke.ts",
     "revoke-grants": "node dist/revoke-grants.js"
   },
   "license": "MIT",

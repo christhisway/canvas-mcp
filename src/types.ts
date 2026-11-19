@@ -23,6 +23,8 @@ export interface Course {
   enrollments?: Enrollment[];
   syllabus_body?: string | null;
   html_url?: string;
+  apply_assignment_group_weights?: boolean;
+  grading_standard_id?: number | null;
 }
 
 export interface SubmissionComment {
@@ -62,6 +64,8 @@ export interface Assignment {
   lock_explanation?: string;
   published?: boolean;
   is_quiz_assignment?: boolean;
+  omit_from_final_grade?: boolean;
+  grading_type?: string;
   submission?: Submission;
 }
 
@@ -69,7 +73,15 @@ export interface AssignmentGroup {
   id: number;
   name: string;
   group_weight: number | null;
+  rules?: { drop_lowest?: number; drop_highest?: number; never_drop?: number[] } | null;
   assignments?: Assignment[];
+}
+
+export interface GradingStandard {
+  id: number;
+  title: string;
+  /** Lowest score for each letter, as a fraction of 1 (0.94 = 94%). */
+  grading_scheme: Array<{ name: string; value: number }>;
 }
 
 export interface PlannerItem {

@@ -13,6 +13,7 @@ It runs as a Node server on a Mac at home, published over HTTPS with Tailscale F
 | `list_assignments` | Assignments in one course (filter by upcoming, overdue, unsubmitted, …) |
 | `get_assignment` | Instructions, dates, allowed submission types and extensions, your submission, grader comments |
 | `get_grades` | Current and final score, assignment-group weights, graded scores, missing work |
+| `grade_whatif` | Projects a grade from assumed scores, or the average you need on the remaining work for a target ("B+", "87%"); follows group weights, drop rules, excused work and the course's letter scale |
 | `list_announcements` | Recent announcements from one or all courses |
 | `get_syllabus` | Syllabus page as text; if it's empty, a page, file or module item named "syllabus" |
 | `read_file` | Text of a course file (PDF slides and handouts, plain text, code, HTML), found by name or id; long PDFs come back a few pages at a time |
@@ -74,7 +75,7 @@ deploy/ctl.sh funnel      (re)enable Funnel and print the URLs
 
 ```bash
 npm install
-npm test          # mock Canvas + mock Microsoft, end to end over real HTTP
+npm test          # grade-calculator unit checks, then mock Canvas + mock Microsoft end to end over real HTTP
 npm run dev       # tsx watch; needs a .env with PUBLIC_URL=http://localhost:8787
 npm run build && npm start
 ```

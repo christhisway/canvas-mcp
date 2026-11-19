@@ -3,9 +3,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CanvasError, optional, type CanvasClient } from "../canvas.js";
 import { hasEnded, type CourseDirectory } from "../courses.js";
 import { fileKind, findFiles, humanSize, MAX_FILE_BYTES, pdfText, pickFile, plainText } from "../files.js";
+import {
+  CANVAS_DEFAULT_SCALE, currentView, finalView, gradeCourse, letterFor, parseTarget, round2, scaleFrom, solveTarget,
+  toGradeGroups, type GradeGroup, type GradeItem,
+} from "../grades.js";
 import { findSyllabus } from "../syllabus.js";
 import { compact, errorResult, htmlToText, json, makeDateFormatter } from "../format.js";
-import type { Assignment, AssignmentGroup, CanvasFile, Course, DiscussionTopic, PlannerItem, Submission } from "../types.js";
+import type { Assignment, AssignmentGroup, CanvasFile, Course, DiscussionTopic, GradingStandard, PlannerItem, Submission } from "../types.js";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
@@ -328,6 +332,161 @@ export function registerReadTools(
   );
 
   server.registerTool(
+    "grade_whatif",
+    {
+      title: "Grade what-if",
+      description:
+        "Projects a course grade. Give target (a letter like \"B+\" or a percentage) to get the average needed " +
+        "on the remaining ungraded work, or hypotheticals (scores for named assignments) to see the grade they'd " +
+        "give; both can be used together. Uses the course's group weights, drop rules and letter scale, and " +
+        "computes locally (nothing is changed in Canvas). " +
+        SCORES_NOTE,
+      inputSchema: {
+        course: courseRef,
+        target: z.string().optional().describe('Goal for the course: a letter ("B+") or a percentage ("87" or "87%")'),
+        hypotheticals: z
+          .array(
+            z.object({
+              assignment_id: z.number().int().optional(),
+              name: z.string().optional().describe("Part of the assignment's name, if no assignment_id"),
+              score: z
+                .union([z.number(), z.string().regex(/^\s*\d+(\.\d+)?\s*%\s*$/)])
+                .describe('Points (e.g. 42), or a percentage of the points as a string (e.g. "85%")'),
+            }),
+          )
+          .optional()
+          .describe("Scores to assume, including for work already graded"),
+        count_missing_as_zero: z
+          .boolean()
+          .default(true)
+          .describe("Count work Canvas marks missing as 0 instead of as still to do"),
+      },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ course, target, hypotheticals, count_missing_as_zero }) => {
+      const c = await courses.resolve(course);
+      const [full, canvasGroups] = await Promise.all([
+        canvas.get<Course>(`/courses/${c.id}`, { include: ["total_scores"] }),
+        canvas.getAll<AssignmentGroup>(`/courses/${c.id}/assignment_groups`, {
+          include: ["assignments", "submission"],
+        }),
+      ]);
+      const weighted = Boolean(full.apply_assignment_group_weights);
+      const groups = toGradeGroups(canvasGroups);
+      const notes: string[] = [];
+
+      let scale = CANVAS_DEFAULT_SCALE;
+      let scaleSource = "Canvas default";
+      if (full.grading_standard_id) {
+        const standards = await optional(canvas.getAll<GradingStandard>(`/courses/${c.id}/grading_standards`), []);
+        const own = standards.find((s) => s.id === full.grading_standard_id);
+        if (own?.grading_scheme?.length) {
+          scale = scaleFrom(own);
+          scaleSource = `course ("${own.title}")`;
+        } else {
+          notes.push("Couldn't read the course's own letter scale, so letters use Canvas's default scale.");
+        }
+      }
+
+      // Hypothetical scores, keyed by assignment id.
+      const items = groups.flatMap((g) => g.items);
+      const assumed = new Map<number, number>();
+      const assumedOut = (hypotheticals ?? []).map((h) => {
+        const item = findItem(items, h.assignment_id, h.name);
+        const score = typeof h.score === "number" ? h.score : (parseFloat(h.score) / 100) * item.points;
+        assumed.set(item.id, score);
+        return compact({ id: item.id, name: item.name, score: round2(score), out_of: item.points, excused_now: item.excused || undefined });
+      });
+      // An assumed score overrides an excusal too.
+      const withAssumed = groups.map((g) => ({
+        ...g,
+        items: g.items.map((i) => (assumed.has(i.id) ? { ...i, score: assumed.get(i.id)!, excused: false } : i)),
+      }));
+
+      const view = (gs: GradeGroup[], fn: typeof currentView) => {
+        const r = gradeCourse(gs, weighted, fn);
+        return { result: r, out: compact({ percent: r.percent === null ? undefined : round2(r.percent), letter: letterFor(r.percent, scale) }) };
+      };
+      const now = { current: view(groups, currentView), final: view(groups, finalView) };
+
+      const e = studentEnrollment(full) ?? studentEnrollment(c);
+      const canvasCurrent = e?.computed_current_score;
+      if (typeof canvasCurrent === "number" && now.current.result.percent !== null) {
+        if (Math.abs(round2(now.current.result.percent) - canvasCurrent) > 0.01) {
+          notes.push(
+            `This tool's current score (${round2(now.current.result.percent)}) differs from Canvas's (${canvasCurrent}); ` +
+              "the course may use settings students can't see, so treat projections as approximate.",
+          );
+        }
+      }
+
+      let projected: Record<string, unknown> | undefined;
+      if (assumed.size > 0) {
+        projected = { current: view(withAssumed, currentView).out, final: view(withAssumed, finalView).out };
+      }
+
+      let targetOut: Record<string, unknown> | undefined;
+      if (target !== undefined) {
+        const goal = parseTarget(target, scale);
+        const remainingItems = withAssumed
+          .flatMap((g) => g.items)
+          .filter((i) => i.score === null && !i.excused && i.points > 0 && !(count_missing_as_zero && i.missing));
+        const remaining = new Set(remainingItems.map((i) => i.id));
+        const r = solveTarget(withAssumed, weighted, goal, remaining, finalView);
+        const zeroed = count_missing_as_zero
+          ? withAssumed.flatMap((g) => g.items).filter((i) => i.score === null && !i.excused && i.missing)
+          : [];
+        targetOut = compact({
+          target: target.trim(),
+          target_percent: r.target_percent,
+          needed_average_percent: r.needed_percent,
+          reachable: r.reachable,
+          already_secured: r.already_secured || undefined,
+          best_possible: r.best_possible,
+          worst_possible: r.worst_possible,
+          note: r.already_secured
+            ? "Reached even with 0 on everything remaining."
+            : !r.reachable
+              ? `Unreachable: 100% on everything remaining gives ${r.best_possible ?? "no grade"}.`
+              : `Needs an average of ${r.needed_percent}% on the remaining work (every remaining item at that percentage).`,
+          remaining: remainingItems.map((i) => ({ id: i.id, name: i.name, points: i.points })),
+          counted_as_zero: zeroed.length ? zeroed.map((i) => ({ id: i.id, name: i.name, points: i.points })) : undefined,
+        });
+      }
+
+      const finalGroups = now.final.result.groups;
+      return compact({
+        course: `${c.course_code} — ${c.name}`,
+        weighted,
+        letter_scale: scaleSource,
+        canvas: compact({
+          current_score: e?.computed_current_score,
+          current_grade: e?.computed_current_grade,
+          final_score: e?.computed_final_score,
+          final_grade: e?.computed_final_grade,
+        }),
+        now: { current: now.current.out, final: now.final.out },
+        hypotheticals: assumedOut.length ? assumedOut : undefined,
+        projected,
+        target: targetOut,
+        groups: now.current.result.groups.map((r, i) =>
+          compact({
+            name: r.group.name,
+            weight_percent: weighted ? r.group.weight : undefined,
+            current_percent: r.percent === null ? undefined : round2(r.percent),
+            final_percent: finalGroups[i].percent === null ? undefined : round2(finalGroups[i].percent!),
+            drops: r.group.drop_lowest || r.group.drop_highest
+              ? compact({ lowest: r.group.drop_lowest || undefined, highest: r.group.drop_highest || undefined })
+              : undefined,
+            dropped_now: r.dropped.length ? r.dropped.map((d) => d.name) : undefined,
+          }),
+        ),
+        notes: notes.length ? notes : undefined,
+      });
+    }),
+  );
+
+  server.registerTool(
     "list_announcements",
     {
       title: "List announcements",
@@ -444,5 +603,24 @@ export function registerReadTools(
       const extracted = kind === "pdf" ? await pdfText(bytes, from_page, to_page) : plainText(bytes, kind);
       return compact({ course: label, file: info, ...extracted });
     }),
+  );
+}
+
+/** An assignment by id, or by exact (then partial) name, for grade_whatif's hypotheticals. */
+function findItem(items: GradeItem[], id: number | undefined, name: string | undefined): GradeItem {
+  if (id !== undefined) {
+    const hit = items.find((i) => i.id === id);
+    if (!hit) throw new Error(`No graded assignment with id ${id} in this course.`);
+    return hit;
+  }
+  const needle = name?.trim().toLowerCase();
+  if (!needle) throw new Error("Each hypothetical needs an assignment_id or a name.");
+  const exact = items.filter((i) => i.name.toLowerCase() === needle);
+  if (exact.length === 1) return exact[0];
+  const partial = items.filter((i) => i.name.toLowerCase().includes(needle));
+  if (partial.length === 1) return partial[0];
+  if (partial.length === 0) throw new Error(`No graded assignment in this course has "${name}" in its name.`);
+  throw new Error(
+    `"${name}" matches more than one assignment: ${partial.map((i) => `${i.name} (id ${i.id})`).join("; ")}. Use assignment_id.`,
   );
 }
