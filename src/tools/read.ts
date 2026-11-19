@@ -282,6 +282,138 @@ export function registerReadTools(
     }),
   );
 
+  const commentsOut = (s: Submission) =>
+    (s.submission_comments ?? []).map((m) =>
+      compact({
+        from: m.author_name,
+        at: date(m.created_at),
+        text: m.comment?.length > 4000 ? `${m.comment.slice(0, 4000)}…` : m.comment,
+        attachments: m.attachments?.length
+          ? m.attachments.map((f) => compact({ name: f.display_name ?? f.filename, url: f.url }))
+          : undefined,
+      }),
+    );
+
+  /** Each rubric criterion with the grader's points, chosen rating and comment. */
+  const rubricOut = (a: Assignment, s: Submission) => {
+    const assessment = s.rubric_assessment ?? {};
+    return (a.rubric ?? []).map((c) => {
+      const r = assessment[c.id];
+      const rating = r?.rating_id ? c.ratings?.find((x) => x.id === r.rating_id) : undefined;
+      return compact({
+        criterion: c.description,
+        detail: c.long_description ? htmlToText(c.long_description, 1000) : undefined,
+        points: r?.points ?? undefined,
+        out_of: c.points,
+        rating: rating?.description,
+        rating_detail: rating?.long_description ? htmlToText(rating.long_description, 1000) : undefined,
+        comment: r?.comments || undefined,
+        assessed: r ? undefined : false,
+      });
+    });
+  };
+
+  server.registerTool(
+    "get_feedback",
+    {
+      title: "Get feedback",
+      description:
+        "Instructor feedback on graded work: score, each rubric criterion (points, rating, grader's comment) and " +
+        "submission comments with any attachments. Name one assignment by assignment_id or part of its name; " +
+        "leave both out to list every assignment in the course that has comments or a rubric assessment, then " +
+        "call again with an assignment_id for the details.",
+      inputSchema: {
+        course: courseRef,
+        assignment_id: z.number().int().optional().describe("Assignment id"),
+        name: z.string().optional().describe('Part of the assignment name, e.g. "project 1"'),
+      },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ course, assignment_id, name }) => {
+      const c = await courses.resolve(course);
+      const label = `${c.course_code} — ${c.name}`;
+
+      if (assignment_id === undefined && !name?.trim()) {
+        const subs = await canvas.getAll<Submission>(`/courses/${c.id}/students/submissions`, {
+          include: ["submission_comments", "rubric_assessment", "assignment"],
+        });
+        const withFeedback = subs
+          .filter((s) => s.assignment && ((s.submission_comments?.length ?? 0) > 0 || hasAssessment(s)))
+          .sort((x, y) => (y.graded_at ?? "").localeCompare(x.graded_at ?? ""));
+        return compact({
+          course: label,
+          note: withFeedback.length ? undefined : "No assignment in this course has comments or a rubric assessment yet.",
+          assignments: withFeedback.map((s) => {
+            const last = s.submission_comments?.at(-1);
+            return compact({
+              id: s.assignment!.id,
+              name: s.assignment!.name,
+              score: s.score,
+              out_of: s.assignment!.points_possible,
+              graded: date(s.graded_at),
+              comments: s.submission_comments?.length || undefined,
+              rubric: hasAssessment(s) || undefined,
+              latest_comment: last
+                ? `${last.author_name}: ${last.comment.length > 300 ? `${last.comment.slice(0, 300)}…` : last.comment}`
+                : undefined,
+            });
+          }),
+        });
+      }
+
+      let aid = assignment_id;
+      if (aid === undefined) {
+        const needle = name!.trim();
+        const found = await canvas.getAll<Assignment>(`/courses/${c.id}/assignments`, {
+          search_term: needle.length >= 2 ? needle : undefined,
+        });
+        const lower = needle.toLowerCase();
+        const partial = found.filter((a) => a.name.toLowerCase().includes(lower));
+        const exact = partial.filter((a) => a.name.toLowerCase() === lower);
+        const pick = exact.length === 1 ? exact : partial;
+        if (pick.length === 0) return { course: label, note: `No assignment in this course has "${needle}" in its name.` };
+        if (pick.length > 1) {
+          return {
+            course: label,
+            note: "Several assignments match; call again with one assignment_id.",
+            matches: pick.map((a) => compact({ id: a.id, name: a.name, due: date(a.due_at) })),
+          };
+        }
+        aid = pick[0].id;
+      }
+
+      const [a, s] = await Promise.all([
+        canvas.get<Assignment>(`/courses/${c.id}/assignments/${aid}`),
+        canvas.get<Submission>(`/courses/${c.id}/assignments/${aid}/submissions/self`, {
+          include: ["submission_comments", "rubric_assessment"],
+        }),
+      ]);
+      const rubric = hasAssessment(s) ? rubricOut(a, s) : undefined;
+      const comments = commentsOut(s);
+      const graded = s.score !== null || s.excused || s.workflow_state === "graded";
+      return compact({
+        course: label,
+        id: a.id,
+        name: a.name,
+        score: s.score,
+        out_of: a.points_possible,
+        grade: s.grade,
+        status: s.excused ? "excused" : s.missing ? "missing" : s.workflow_state,
+        graded: date(s.graded_at),
+        late: s.late || undefined,
+        rubric,
+        rubric_unassessed: !rubric && a.rubric?.length ? "This assignment has a rubric, but it hasn't been filled in for you." : undefined,
+        comments: comments.length ? comments : undefined,
+        note: !graded
+          ? "Not graded yet (or the grade isn't posted to students)."
+          : !rubric && comments.length === 0
+            ? "No comments or rubric feedback on this submission."
+            : undefined,
+        url: a.html_url,
+      });
+    }),
+  );
+
   server.registerTool(
     "get_grades",
     {
@@ -623,4 +755,9 @@ function findItem(items: GradeItem[], id: number | undefined, name: string | und
   throw new Error(
     `"${name}" matches more than one assignment: ${partial.map((i) => `${i.name} (id ${i.id})`).join("; ")}. Use assignment_id.`,
   );
+}
+
+/** True when a grader filled in at least one rubric criterion. */
+function hasAssessment(s: Submission): boolean {
+  return Object.values(s.rubric_assessment ?? {}).some((r) => r && (r.points != null || r.rating_id || r.comments));
 }

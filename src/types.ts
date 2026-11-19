@@ -31,7 +31,26 @@ export interface SubmissionComment {
   author_name: string;
   comment: string;
   created_at: string;
+  attachments?: Array<{ display_name?: string; filename?: string; url?: string }>;
 }
+
+export interface RubricRating {
+  id: string;
+  description: string;
+  long_description?: string | null;
+  points: number;
+}
+
+export interface RubricCriterion {
+  id: string;
+  description: string;
+  long_description?: string | null;
+  points: number;
+  ratings?: RubricRating[];
+}
+
+/** Keyed by criterion id. */
+export type RubricAssessment = Record<string, { points?: number | null; rating_id?: string | null; comments?: string | null }>;
 
 export interface Submission {
   workflow_state: "unsubmitted" | "submitted" | "graded" | "pending_review" | string;
@@ -45,6 +64,11 @@ export interface Submission {
   attempt: number | null;
   submission_comments?: SubmissionComment[];
   preview_url?: string;
+  assignment_id?: number;
+  graded_at?: string | null;
+  rubric_assessment?: RubricAssessment | null;
+  /** Present with include[]=assignment. */
+  assignment?: Assignment;
 }
 
 export interface Assignment {
@@ -65,6 +89,7 @@ export interface Assignment {
   published?: boolean;
   is_quiz_assignment?: boolean;
   omit_from_final_grade?: boolean;
+  rubric?: RubricCriterion[];
   grading_type?: string;
   submission?: Submission;
 }
