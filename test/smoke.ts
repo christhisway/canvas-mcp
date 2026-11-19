@@ -317,6 +317,7 @@ try {
     const out = parse(await call("list_courses"));
     assert.deepEqual(out.map((c: any) => c.code), ["CS 240", "PHIL 230"]);
     assert.equal(out[0].current_grade, "A");
+    assert.equal(out[0].final_score, 71.2);
     const all = parse(await call("list_courses", { include_past: true }));
     assert.deepEqual(all.map((c: any) => [c.code, c.ended ?? false]), [
       ["CS 240", false], ["PHIL 230", false], ["GEOL 101", true], ["HIST 105", true],
@@ -343,7 +344,7 @@ try {
   await check("resolves a course by code and lists assignments", async () => {
     const out = parse(await call("list_assignments", { course: "cs240" }));
     assert.equal(out.course_id, 101);
-    assert.equal(out.assignments.length, 3);
+    assert.equal(out.assignments.length, 4);
   });
 
   await check("ambiguous / unknown course gives a helpful error", async () => {
@@ -358,10 +359,16 @@ try {
     assert.equal(out.submission.comments[0].text, "Nice work");
   });
 
-  await check("get_grades computes group percentages", async () => {
+  await check("get_grades computes group percentages and shows final score + missing work", async () => {
     const out = parse(await call("get_grades", { course: "101" }));
     assert.equal(out.groups[1].group_score_percent, 100);
-    assert.equal(out.groups[0].ungraded_count, 1);
+    assert.equal(out.groups[0].ungraded_count, 2);
+    assert.equal(out.current_score, 93.4);
+    assert.equal(out.final_score, 71.2);
+    assert.equal(out.final_grade, "C-");
+    assert.equal(out.missing_count, 1);
+    assert.deepEqual(out.groups[0].missing.map((a: any) => a.name), ["Observer Pattern Writeup"]);
+    assert.equal(out.groups[1].missing, undefined);
   });
 
   await check("announcements across all courses", async () => {

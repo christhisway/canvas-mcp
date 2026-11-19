@@ -20,6 +20,21 @@ export function registerReadTools(
 
   const studentEnrollment = (c: Course) => c.enrollments?.find((e) => e.type === "student") ?? c.enrollments?.[0];
 
+  // Canvas's current score leaves out anything not graded yet, so missing work doesn't pull it down.
+  // Its final score counts every ungraded assignment as zero, including ones not due yet (issue #2).
+  const courseScores = (c: Course) => {
+    const e = studentEnrollment(c);
+    return {
+      current_score: e?.computed_current_score,
+      current_grade: e?.computed_current_grade,
+      final_score: e?.computed_final_score,
+      final_grade: e?.computed_final_grade,
+    };
+  };
+  const SCORES_NOTE =
+    "current_score counts graded work only, so missing work doesn't lower it; final_score counts every " +
+    "ungraded assignment as zero, including ones not due yet.";
+
   const submissionSummary = (s: Submission | undefined) =>
     s &&
     compact({
@@ -59,7 +74,8 @@ export function registerReadTools(
       title: "List courses",
       description:
         "Lists the student's current Canvas courses with term and grade. Courses from terms that have ended " +
-        "are left out unless include_past is true.",
+        "are left out unless include_past is true. " +
+        SCORES_NOTE,
       inputSchema: {
         include_past: z
           .boolean()
@@ -70,18 +86,16 @@ export function registerReadTools(
     },
     wrap(async ({ include_past }) => {
       const list = include_past ? await courses.all(true) : await courses.active(true);
-      return list.map((c) => {
-        const e = studentEnrollment(c);
-        return compact({
+      return list.map((c) =>
+        compact({
           id: c.id,
           code: c.course_code,
           name: c.name,
           term: c.term?.name,
           ended: (include_past && hasEnded(c)) || undefined,
-          current_score: e?.computed_current_score,
-          current_grade: e?.computed_current_grade,
-        });
-      });
+          ...courseScores(c),
+        }),
+      );
     }),
   );
 
@@ -219,8 +233,10 @@ export function registerReadTools(
     {
       title: "Get grades",
       description:
-        "Grade breakdown for one course: current overall score, assignment groups with weights, and each " +
-        "graded assignment's score.",
+        "Grade breakdown for one course: overall scores, assignment groups with weights, each graded " +
+        "assignment's score, and assignments Canvas marks missing. " +
+        SCORES_NOTE +
+        " group_score_percent also counts graded work only; check each group's missing list.",
       inputSchema: { course: courseRef },
       annotations: READ_ONLY,
     },
@@ -229,11 +245,11 @@ export function registerReadTools(
       const groups = await canvas.getAll<AssignmentGroup>(`/courses/${c.id}/assignment_groups`, {
         include: ["assignments", "submission"],
       });
-      const e = studentEnrollment(c);
+      const missing = (g: AssignmentGroup) => (g.assignments ?? []).filter((a) => a.submission?.missing);
       return compact({
         course: `${c.course_code} — ${c.name}`,
-        current_score: e?.computed_current_score,
-        current_grade: e?.computed_current_grade,
+        ...courseScores(c),
+        missing_count: groups.reduce((n, g) => n + missing(g).length, 0) || undefined,
         groups: groups.map((g) => {
           const graded = (g.assignments ?? []).filter((a) => a.submission && a.submission.score !== null);
           const earned = graded.reduce((sum, a) => sum + (a.submission?.score ?? 0), 0);
@@ -252,6 +268,9 @@ export function registerReadTools(
               }),
             ),
             ungraded_count: (g.assignments ?? []).length - graded.length || undefined,
+            missing: missing(g).map((a) =>
+              compact({ name: a.name, due: date(a.due_at), points: a.points_possible, score: a.submission?.score }),
+            ),
           });
         }),
       });

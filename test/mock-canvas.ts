@@ -38,7 +38,7 @@ export async function startMockCanvas() {
   });
 
   const courses = [
-    { id: 101, name: "Software Design", course_code: "CS 240", term: { name: "Fall 2026", end_at: iso(40) }, enrollments: [{ type: "student", computed_current_score: 93.4, computed_current_grade: "A" }] },
+    { id: 101, name: "Software Design", course_code: "CS 240", term: { name: "Fall 2026", end_at: iso(40) }, enrollments: [{ type: "student", computed_current_score: 93.4, computed_current_grade: "A", computed_final_score: 71.2, computed_final_grade: "C-" }] },
     { id: 202, name: "Philosophy of Mind", course_code: "PHIL 230", term: { name: "Fall 2026" }, enrollments: [{ type: "student", computed_current_score: 88.1, computed_current_grade: "B+" }] },
     // Enrollments Canvas still calls "active" although the course is over (issue #1).
     { id: 303, name: "Intro to Geology", course_code: "GEOL 101", term: { name: "Fall 2025", end_at: iso(-320) }, enrollments: [{ type: "student", computed_current_score: 91, computed_current_grade: "A-" }] },
@@ -61,11 +61,14 @@ export async function startMockCanvas() {
     "11": { id: 11, course_id: 101, name: "Factory Pattern Writeup", description: "<p>Write 500 words on <em>factories</em>.</p>", due_at: iso(2), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], allowed_extensions: ["pdf"], allowed_attempts: -1, html_url: "https://canvas.test/courses/101/assignments/11" },
     "12": { id: 12, course_id: 101, name: "Reflection", description: "<p>Reflect.</p>", due_at: iso(-1), lock_at: null, unlock_at: null, points_possible: 5, submission_types: ["online_text_entry"], allowed_attempts: 1, html_url: "https://canvas.test/courses/101/assignments/12" },
     "13": { id: 13, course_id: 101, name: "Portfolio link", description: null, due_at: iso(5), lock_at: null, unlock_at: null, points_possible: 10, submission_types: ["online_url"], html_url: "https://canvas.test/courses/101/assignments/13" },
+    "14": { id: 14, course_id: 101, name: "Observer Pattern Writeup", description: null, due_at: iso(-4), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/101/assignments/14" },
   };
   const mySubs: Record<string, any> = {
     "11": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
     "12": { workflow_state: "graded", submitted_at: iso(-2), score: 5, grade: "5", attempt: 1, submission_comments: [{ author_name: "TA", comment: "Nice work", created_at: iso(-1) }] },
     "13": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
+    // Past due, never handed in, not graded: invisible in the current score (issue #2).
+    "14": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null, missing: true },
   };
 
   app.get("/api/v1/courses/:cid/assignments", (_req, res) => {
@@ -81,7 +84,7 @@ export async function startMockCanvas() {
   });
   app.get("/api/v1/courses/:cid/assignment_groups", (_req, res) => {
     res.json([
-      { id: 1, name: "Writeups", group_weight: 60, assignments: [{ ...assignments["11"], submission: mySubs["11"] }] },
+      { id: 1, name: "Writeups", group_weight: 60, assignments: ["11", "14"].map((id) => ({ ...assignments[id], submission: mySubs[id] })) },
       { id: 2, name: "Participation", group_weight: 40, assignments: [{ ...assignments["12"], submission: mySubs["12"] }] },
     ]);
   });
