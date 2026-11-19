@@ -11,7 +11,7 @@ You'll need these along the way:
 - [ ] **Access to the Azure portal** with the account that owns the To Do connector's app registration.
 - [ ] **A Tailscale account** (sign up at tailscale.com; the free plan is enough).
 - [ ] **The ntfy app on your phone**, from the App Store.
-- [ ] **The Microsoft account email you use for the To Do connector.** It goes in `ALLOWED_EMAILS`.
+- [ ] **Which Microsoft account you'll sign in with** when you connect Canvas in claude.ai. Its email goes in `ALLOWED_EMAILS`. It doesn't have to be the account you use for To Do, but a personal account is safest. A school account may be blocked from consenting to a third-party app.
 - [ ] **About an hour,** and a low-stakes Canvas assignment (or a sandbox course) for the submission test at the end.
 
 ## 1. Prepare the Mac
@@ -136,7 +136,7 @@ Edit `~/development/canvas-mcp/.env` (for example `nano .env`):
 | `MS_CLIENT_ID` | Application (client) ID from step 6 |
 | `MS_CLIENT_SECRET` | secret **Value** from step 6 |
 | `MS_TENANT` | leave as `common` |
-| `ALLOWED_EMAILS` | your Microsoft account email |
+| `ALLOWED_EMAILS` | the email of the Microsoft account you'll sign in with (from step 0) |
 | `COOKIE_SECRET` | output of `openssl rand -hex 32` |
 | `NTFY_URL` | `https://ntfy.sh/<topic>` from step 8 |
 | `SUBMISSIONS_DIR` | full path from step 9, or leave `./submissions` |
