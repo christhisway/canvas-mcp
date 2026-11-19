@@ -1,6 +1,6 @@
 # 8. Run connectors as a dedicated standard user, with FileVault off and automatic login
 
-- **Status:** Accepted
+- **Status:** Superseded by [12](0012-filevault-on-owner-apple-id.md)
 - **Date:** 2026-11-19
 
 ## Context

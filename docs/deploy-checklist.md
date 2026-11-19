@@ -5,9 +5,9 @@ Step-by-step setup for the home-server Mac. Tick the boxes as you go; GitHub ren
 You'll use **two macOS accounts** on that Mac:
 
 - **Your admin account** for system setup (Homebrew, `pmset`, Tailscale).
-- **A dedicated standard user**, called `devserver` below, that runs the connectors and logs in automatically.
+- **A dedicated standard user**, called `devserver` below, that runs the connectors. It's the account that unlocks FileVault at startup.
 
-[ADR 8](architecture/0008-dedicated-user-filevault-off.md) explains why: with FileVault off, the disk should hold only secrets you can revoke. Other decisions are in [docs/architecture/](architecture/README.md), and background is in the [README](../README.md).
+[ADR 12](architecture/0012-filevault-on-owner-apple-id.md) explains the setup: FileVault on, no automatic login, and planned restarts with `sudo fdesetup authrestart`. A server set up under the older [ADR 8](architecture/0008-dedicated-user-filevault-off.md) (FileVault off) can be changed with the steps at the end of ADR 12. Other decisions are in [docs/architecture/](architecture/README.md), and background is in the [README](../README.md).
 
 ## 0. Before you start
 
@@ -18,13 +18,12 @@ You'll need:
 - [ ] **The Microsoft account you'll sign in with** when you connect Canvas in claude.ai. Its email goes in `ALLOWED_EMAILS`.
   - It doesn't have to be the account you use for To Do.
   - A personal account is safest, because a school account may be blocked from consenting to a third-party app.
-- [ ] **A new, unique password** for the `devserver` user. Automatic login stores it on disk in a recoverable form, so don't reuse it anywhere.
+- [ ] **A new, unique password** for the `devserver` user. It also unlocks the disk, so don't reuse it anywhere.
 - [ ] **About an hour and a quarter.**
 
 ## 1. Admin account: prepare the Mac
 
 - [ ] **Power and updates.** Plug in the power adapter, and install pending macOS updates now.
-- [ ] **FileVault is off:** System Settings → Privacy & Security → FileVault.
 - [ ] **Keep it awake** and restart it after a power cut:
   ```bash
   sudo pmset -a sleep 0 disksleep 0 autorestart 1
@@ -34,7 +33,7 @@ You'll need:
   sudo pmset -a disablesleep 1
   ```
 - [ ] **Check:** `pmset -g` shows `sleep 0`, and with the lid-closed setting, `SleepDisabled 1`.
-- [ ] **Decide how macOS updates install:** System Settings → General → Software Update → Automatic Updates. A restart for an update comes back on its own through automatic login.
+- [ ] **macOS updates download but don't install by themselves:** System Settings → General → Software Update → Automatic Updates. Turn off installing macOS updates. An update's own restart would stop at the FileVault unlock screen. Install updates by hand, then restart with `sudo fdesetup authrestart`.
 
 ## 2. Admin account: create the service user
 
@@ -42,7 +41,8 @@ You'll need:
   - Type: **Standard** (not Administrator)
   - Name: `devserver`
   - Password: the unique one from step 0
-- [ ] **Log in automatically:** System Settings → Users & Groups → **Automatically log in as** → `devserver`.
+- [ ] **Check `devserver` can unlock the disk:** `sysadminctl -secureTokenStatus devserver` shows ENABLED. A user created in System Settings by an admin normally gets one.
+- [ ] **Turn on FileVault:** System Settings → Privacy & Security → FileVault. Store the recovery key somewhere off this Mac. Automatic login stays off, because macOS doesn't allow it with FileVault.
 - [ ] **Turn on SSH.** System Settings → General → Sharing → **Remote Login** on. Under "Allow access for", choose **Only these users**: `devserver` and your admin account.
 
 ## 3. Admin account: install tools
@@ -123,7 +123,7 @@ Log out of the admin account and log in as `devserver`. Do every step from here 
 
 - [ ] **Screen lock:**
   - System Settings → Lock Screen: **Turn display off when inactive** after 1–2 minutes, and **Require password** immediately.
-  - Don't sign in to an Apple ID on this account.
+  - Don't sign in to an Apple ID on this account unless a connector needs one. A Messages connector does: then sign in with your own Apple ID and turn on only Messages and Find My ([ADR 12](architecture/0012-filevault-on-owner-apple-id.md)).
 - [ ] **Put Homebrew's tools on this account's PATH.** Step 3's `eval` lines only went into the admin account's shell profile, so here `tailscale` and `node` would otherwise be "not found":
   ```bash
   echo 'export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"' >> ~/.zprofile
@@ -257,10 +257,11 @@ Paste any errors or odd output into a Claude Code session in this repo. These to
 
 ## 13. Resilience and isolation checks
 
-- [ ] **Reboot test.** Run `sudo reboot` from the admin account. Once it's back, with no one touching it:
+- [ ] **Reboot test.** Run `sudo fdesetup authrestart` from the admin account. Once it's back, with no one touching it:
   - it's logged in as `devserver` and the screen locks
   - `<PUBLIC_URL>/healthz` works from your phone
   - the connector still answers in claude.ai
+- [ ] **Unplanned-restart test.** Run `sudo reboot` (not `authrestart`). The Mac should wait at the FileVault unlock screen. Unlock it as `devserver`, either at the Mac or over SSH from another device on your home network, and check `deploy/ctl.sh status` shows the connector running again.
 - [ ] **Refresh test.** More than an hour after connecting, use the connector again. It should work without asking you to reconnect, and the log shows a `POST /token`.
 - [ ] **SSH from your laptop** (with Tailscale installed there): `ssh devserver@<machine>`, then `cd ~/connectors/canvas-mcp && deploy/ctl.sh status`.
 - [ ] **Isolation.** From the server, try `ssh <you>@<laptop>` or `curl http://<laptop>:<some open port>`. It should time out, because the server can't reach your other devices.
@@ -292,5 +293,6 @@ Do these from any other device, in this order:
 2. **Canvas** → Account → Settings → Approved Integrations: delete the "Claude connector" token.
 3. **Azure portal** → the app → Certificates & secrets: delete the `canvas-mcp` secret.
 4. **GitHub** → christhisway/canvas-mcp → Settings → Deploy keys: delete the server's key.
+5. **Apple ID:** in Find My, lock or erase the Mac, then remove it from your Apple ID's device list ([ADR 12](architecture/0012-filevault-on-owner-apple-id.md)). The disk is encrypted while the Mac is off.
 
 Then set up a new machine from the top of this checklist. Connecting again issues new tokens, and anything the old server issued is useless without it.

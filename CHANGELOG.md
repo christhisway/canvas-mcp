@@ -60,6 +60,7 @@ Fixes and improvements from the first live test against real Canvas. Several too
 - **`course_people`:** duplicate staff entries are merged, and a name that's only a login email is replaced by the person's short or sortable name (#26).
 - **HTML tables** in instructions and pages come out as `a | b | c` rows (#26).
 - **`get_syllabus` on a page that only links to files:** points at the syllabus file by `file_id` and also searches Files for one (#20).
+- **Server setup:** FileVault is on and automatic login is off, so `devserver` can hold a Messages connector's Apple ID data. Planned restarts use `sudo fdesetup authrestart`, and macOS updates are installed by hand. The deploy checklist follows the change, and [ADR 12](docs/architecture/0012-filevault-on-owner-apple-id.md) (superseding ADR 8) lists the steps for an existing server.
 
 ### Fixed
 

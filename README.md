@@ -47,11 +47,11 @@ Why it's built this way (Node on a home server, Microsoft sign-in, Funnel, read-
 
 **Follow [docs/deploy-checklist.md](docs/deploy-checklist.md).** It's the step-by-step list, from preparing the Mac to the first real use in claude.ai.
 
-The server runs as a dedicated **standard** macOS user (`devserver`) that logs in automatically. Your admin account does the system setup. FileVault is off so automatic login works, which is why the disk holds only secrets you can revoke ([ADR 8](docs/architecture/0008-dedicated-user-filevault-off.md)). In outline:
+The server runs as a dedicated **standard** macOS user (`devserver`). Your admin account does the system setup. FileVault is on, so there's no automatic login: planned restarts use `sudo fdesetup authrestart`, and an unplanned restart waits for someone to unlock the disk ([ADR 12](docs/architecture/0012-filevault-on-owner-apple-id.md)). In outline:
 
 1. **Admin account:**
    - run `pmset` so the Mac stays awake
-   - create the `devserver` user and set it to log in automatically
+   - create the `devserver` user and turn on FileVault
    - turn on Remote Login for SSH
    - `brew install node git tailscale`
 2. **Admin account, Tailscale:**

@@ -112,8 +112,8 @@ check_public_url() {
 
 warn_if_admin() {
   if id -Gn | tr ' ' '\n' | grep -qx admin; then
-    echo "warning: $USER is an admin account. ADR 8 runs connectors as a dedicated standard user" >&2
-    echo "         (docs/architecture/0008-dedicated-user-filevault-off.md). Continuing anyway." >&2
+    echo "warning: $USER is an admin account. ADR 12 runs connectors as a dedicated standard user" >&2
+    echo "         (docs/architecture/0012-filevault-on-owner-apple-id.md). Continuing anyway." >&2
   fi
 }
 

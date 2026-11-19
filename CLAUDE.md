@@ -12,8 +12,8 @@ Code is written on one Mac and runs on another: an older Mac used as a home serv
 - `deploy/ctl.sh` works out every path on the server when it runs.
 - `.env` exists only on the server and is never committed.
 - Steps that need the server, a browser, the Azure portal or a phone are the owner's to do. Tell them exactly what to run or click.
-- **Two accounts on the server** ([ADR 8](docs/architecture/0008-dedicated-user-filevault-off.md)):
-  - A dedicated **standard** user, `devserver`, runs the server and logs in automatically. The checkout is at `~/connectors/canvas-mcp`, cloned with a read-only deploy key.
+- **Two accounts on the server** ([ADR 12](docs/architecture/0012-filevault-on-owner-apple-id.md), superseding ADR 8):
+  - A dedicated **standard** user, `devserver`, runs the server and is the account that unlocks FileVault at startup (no automatic login). The checkout is at `~/connectors/canvas-mcp`, cloned with a read-only deploy key.
   - The admin account does everything needing `sudo` or Homebrew, including `brew upgrade node`.
   - Don't write steps that assume the service user can `sudo`. `deploy/ctl.sh` warns if it's run as an admin.
 
