@@ -307,7 +307,7 @@ try {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
-      "get_assignment", "get_feedback", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
+      "course_people", "get_assignment", "get_feedback", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
       "list_announcements", "list_assignments", "list_courses", "read_file",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
@@ -395,6 +395,27 @@ try {
     const ungraded = parse(await call("get_feedback", { course: "CS 240", name: "factory" }));
     assert.match(ungraded.note, /Not graded yet/);
     assert.equal(ungraded.rubric, undefined);
+  });
+
+  await check("course_people lists teachers and TAs, emails only where Canvas shows them, and the student's groups", async () => {
+    const out = parse(await call("course_people", { course: "CS 240" }));
+    assert.deepEqual(out.staff, [
+      { name: "Dana Ortiz", role: "teacher", pronouns: "she/her", email: "dortiz@example.edu" },
+      { name: "Sam Park", role: "ta", role_name: "Lead TA" },
+    ]);
+    assert.deepEqual(out.groups, [{ group: "Lab Group 4", members: [{ name: "Owner Student", you: true }, { name: "Riley Classmate" }] }]);
+    // Riley appears only as a groupmate; the roster entry (with an email) is never fetched.
+    assert.ok(!JSON.stringify(out).includes("riley@example.edu"), "roster data leaked into the output");
+    const tas = parse(await call("course_people", { course: "CS 240", role: "ta" }));
+    assert.deepEqual(tas.staff.map((p: any) => p.name), ["Sam Park"]);
+    assert.equal(tas.groups, undefined);
+    const groupsOnly = parse(await call("course_people", { course: "PHIL 230", role: "group" }));
+    assert.equal(groupsOnly.staff, undefined);
+    assert.deepEqual(groupsOnly.groups.map((g: any) => g.group), ["Reading circle"]);
+    const hidden = parse(await call("course_people", { course: "GEOL 101" }));
+    assert.match(hidden.notes.join(" "), /People list is hidden/);
+    assert.match(hidden.notes.join(" "), /isn't in any group/);
+    assert.deepEqual([...mock.state.peopleTypesAsked].sort(), ["ta", "teacher"], "never asks for the student roster");
   });
 
   await check("get_grades computes group percentages and shows final score + missing work", async () => {

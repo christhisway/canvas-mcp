@@ -172,3 +172,21 @@ export interface Module {
   name: string;
   items?: ModuleItem[];
 }
+
+export interface CourseUser {
+  id: number;
+  name: string;
+  /** Only when the student is allowed to see it (include[]=email). */
+  email?: string | null;
+  pronouns?: string | null;
+  /** Present with include[]=enrollments. */
+  enrollments?: Array<{ type: string; role?: string; course_id?: number }>;
+}
+
+export interface Group {
+  id: number;
+  name: string;
+  course_id?: number;
+  context_type?: string;
+  members_count?: number;
+}

@@ -13,6 +13,7 @@ It runs as a Node server on a Mac at home, published over HTTPS with Tailscale F
 | `list_assignments` | Assignments in one course (filter by upcoming, overdue, unsubmitted, …) |
 | `get_assignment` | Instructions, dates, allowed submission types and extensions, your submission, grader comments |
 | `get_feedback` | Instructor feedback on graded work: rubric criteria with points, rating and comment, plus submission comments and attachment links; or a list of everything in a course that has feedback |
+| `course_people` | Instructors and TAs (email when Canvas shows it), and who's in your groups in the course; never the full roster |
 | `get_grades` | Current and final score, assignment-group weights, graded scores, missing work |
 | `grade_whatif` | Projects a grade from assumed scores, or the average you need on the remaining work for a target ("B+", "87%"); follows group weights, drop rules, excused work and the course's letter scale |
 | `list_announcements` | Recent announcements from one or all courses |

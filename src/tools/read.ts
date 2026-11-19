@@ -9,7 +9,7 @@ import {
 } from "../grades.js";
 import { findSyllabus } from "../syllabus.js";
 import { compact, errorResult, htmlToText, json, makeDateFormatter } from "../format.js";
-import type { Assignment, AssignmentGroup, CanvasFile, Course, DiscussionTopic, GradingStandard, PlannerItem, Submission } from "../types.js";
+import type { Assignment, AssignmentGroup, CanvasFile, Course, CourseUser, DiscussionTopic, GradingStandard, Group, PlannerItem, Submission } from "../types.js";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
@@ -619,6 +619,85 @@ export function registerReadTools(
   );
 
   server.registerTool(
+    "course_people",
+    {
+      title: "Course people",
+      description:
+        "Who teaches a course (instructors and TAs, with email when Canvas shows it to students) and who is in " +
+        "the student's groups in that course (for group projects and lab reports). The full class roster isn't listed.",
+      inputSchema: {
+        course: courseRef,
+        role: z.enum(["teacher", "ta", "group"]).optional().describe("Only this kind of person (default: all three)"),
+      },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ course, role }) => {
+      const c = await courses.resolve(course);
+      const want = (r: "teacher" | "ta" | "group") => !role || role === r;
+      const staffTypes = [want("teacher") && "teacher", want("ta") && "ta"].filter(Boolean) as string[];
+      const notes: string[] = [];
+
+      const [staff, groups, me] = await Promise.all([
+        staffTypes.length
+          ? optional(
+              canvas.getAll<CourseUser>(`/courses/${c.id}/users`, {
+                enrollment_type: staffTypes,
+                include: ["email", "enrollments"],
+              }),
+              undefined,
+            )
+          : [],
+        want("group")
+          ? optional(canvas.getAll<Group>("/users/self/groups", { context_type: "Course" }), undefined)
+          : [],
+        want("group") ? optional(canvas.get<{ id: number }>("/users/self"), undefined) : undefined,
+      ]);
+      if (staff === undefined) notes.push("The People list is hidden in this course, so instructors and TAs can't be listed.");
+
+      const staffOut = (staff ?? []).map((u) => {
+        const mine = (u.enrollments ?? []).filter((e) => e.course_id === undefined || e.course_id === c.id);
+        const kinds = [
+          ...new Set(mine.map((e) => STAFF_ROLE[e.type]).filter((k): k is "teacher" | "ta" => Boolean(k) && staffTypes.includes(k!))),
+        ];
+        // Without enrollment details, Canvas still only returned the types asked for.
+        const roles = kinds.length ? kinds : staffTypes.length === 1 ? [staffTypes[0]] : ["teacher or ta"];
+        const custom = mine.map((e) => e.role).find((r) => r && !STAFF_ROLE[r]);
+        return compact({
+          name: u.name,
+          role: roles.join(", "),
+          role_name: custom,
+          pronouns: u.pronouns || undefined,
+          email: u.email || undefined,
+        });
+      });
+      staffOut.sort((a, b) => (a.role === b.role ? 0 : a.role === "teacher" ? -1 : 1));
+
+      if (groups === undefined) notes.push("Couldn't read the student's groups.");
+      const courseGroups = (groups ?? []).filter((g) => g.course_id === c.id);
+      const groupOut = await Promise.all(
+        courseGroups.map(async (g) => {
+          const members = await optional(canvas.getAll<CourseUser>(`/groups/${g.id}/users`, { include: ["email"] }), undefined);
+          return compact({
+            group: g.name,
+            members: members?.map((u) =>
+              compact({ name: u.name, pronouns: u.pronouns || undefined, email: u.email || undefined, you: me && u.id === me.id ? true : undefined }),
+            ),
+            note: members ? undefined : "This group's member list is hidden.",
+          });
+        }),
+      );
+      if (want("group") && groups && courseGroups.length === 0) notes.push("The student isn't in any group in this course.");
+
+      return compact({
+        course: `${c.course_code} — ${c.name}`,
+        staff: staffTypes.length ? staffOut : undefined,
+        groups: want("group") ? groupOut : undefined,
+        notes: notes.length ? notes : undefined,
+      });
+    }),
+  );
+
+  server.registerTool(
     "list_announcements",
     {
       title: "List announcements",
@@ -761,3 +840,5 @@ function findItem(items: GradeItem[], id: number | undefined, name: string | und
 function hasAssessment(s: Submission): boolean {
   return Object.values(s.rubric_assessment ?? {}).some((r) => r && (r.points != null || r.rating_id || r.comments));
 }
+
+const STAFF_ROLE: Record<string, "teacher" | "ta"> = { TeacherEnrollment: "teacher", TaEnrollment: "ta" };

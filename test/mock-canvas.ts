@@ -26,6 +26,8 @@ export async function startMockCanvas() {
     /** Requests that reached the file-storage host, and whether any carried an Authorization header. */
     storageRequests: 0,
     storageSawAuth: false,
+    /** enrollment_type[] values asked of /courses/:id/users, to check the roster is never requested. */
+    peopleTypesAsked: new Set<string>(),
   };
 
   const now = Date.now();
@@ -216,6 +218,46 @@ export async function startMockCanvas() {
     if (!a) return res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
     res.json(a);
   });
+  // course_people (GitHub #4). CS 240's teacher shows an email; its TA doesn't, as when Canvas hides it.
+  const people: Record<string, Array<{ id: number; name: string; email?: string; pronouns?: string; type: string; role: string }>> = {
+    "101": [
+      { id: 50, name: "Dana Ortiz", email: "dortiz@example.edu", pronouns: "she/her", type: "TeacherEnrollment", role: "TeacherEnrollment" },
+      { id: 51, name: "Sam Park", type: "TaEnrollment", role: "Lead TA" },
+      { id: 52, name: "Riley Classmate", email: "riley@example.edu", type: "StudentEnrollment", role: "StudentEnrollment" },
+    ],
+  };
+  app.get("/api/v1/courses/:cid/users", (req, res) => {
+    if (req.params.cid === "303") return res.status(403).json({ status: "unauthorized", errors: [{ message: "user not authorized to perform that action" }] });
+    const types = ([] as string[]).concat((req.query["enrollment_type[]"] as string | string[]) ?? []);
+    for (const t of types) state.peopleTypesAsked.add(t);
+    if (types.length === 0) state.peopleTypesAsked.add("(all)");
+    const include = ([] as string[]).concat((req.query["include[]"] as string | string[]) ?? []);
+    const typeName = (t: string) => ({ teacher: "TeacherEnrollment", ta: "TaEnrollment", student: "StudentEnrollment" })[t];
+    res.json(
+      (people[req.params.cid] ?? [])
+        .filter((p) => types.length === 0 || types.some((t) => typeName(t) === p.type))
+        .map((p) => ({
+          id: p.id, name: p.name, pronouns: p.pronouns,
+          email: include.includes("email") ? p.email : undefined,
+          enrollments: include.includes("enrollments") ? [{ type: p.type, role: p.role, course_id: Number(req.params.cid) }] : undefined,
+        })),
+    );
+  });
+  app.get("/api/v1/users/self", (_req, res) => res.json({ id: 1, name: "Owner Student" }));
+  app.get("/api/v1/users/self/groups", (_req, res) => {
+    res.json([
+      { id: 900, name: "Lab Group 4", course_id: 101, context_type: "Course", members_count: 2 },
+      { id: 901, name: "Reading circle", course_id: 202, context_type: "Course", members_count: 3 },
+    ]);
+  });
+  app.get("/api/v1/groups/:gid/users", (req, res) => {
+    const members: Record<string, unknown[]> = {
+      "900": [{ id: 1, name: "Owner Student" }, { id: 52, name: "Riley Classmate" }],
+      "901": [{ id: 1, name: "Owner Student" }],
+    };
+    res.json(members[req.params.gid] ?? []);
+  });
+
   // The calling student's submissions in a course (no student_ids, so Canvas means "me").
   app.get("/api/v1/courses/:cid/students/submissions", (req, res) => {
     const include = ([] as string[]).concat((req.query["include[]"] as string | string[]) ?? []);

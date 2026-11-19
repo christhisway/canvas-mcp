@@ -7,6 +7,7 @@ import { registerReadTools } from "./tools/read.js";
 const INSTRUCTIONS = `Read-only tools for the student's own Canvas LMS account. Dates are shown in the student's time zone.
 Use get_upcoming for "what's due" questions; courses can be named by code or name instead of id.
 Use read_file to read lecture slides, handouts and other course files.
+Use course_people to find a course's instructors, TAs and the student's group members.
 Use get_feedback for "where did I lose points" questions.
 Use grade_whatif for "what do I need to get a B+" or "what if I get 85 on the final" questions.
 These tools can't submit or change anything in Canvas. To hand something in, give the student the
