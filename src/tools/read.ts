@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CanvasClient } from "../canvas.js";
+import { CanvasError, type CanvasClient } from "../canvas.js";
 import { hasEnded, type CourseDirectory } from "../courses.js";
 import { findSyllabus } from "../syllabus.js";
 import { compact, errorResult, htmlToText, json, makeDateFormatter } from "../format.js";
@@ -46,6 +46,9 @@ export function registerReadTools(
       grade: s.grade,
       attempt: s.attempt,
     });
+
+  const isDone = (s: Submission | undefined) =>
+    Boolean(s && (s.submitted_at || s.excused || ["submitted", "graded", "pending_review"].includes(s.workflow_state)));
 
   const assignmentSummary = (a: Assignment) =>
     compact({
@@ -106,7 +109,8 @@ export function registerReadTools(
       title: "What's due",
       description:
         "Everything on the student's Canvas planner in a date window across all courses: assignments, quizzes, " +
-        "graded discussions, planner notes, with submitted/missing/graded status. Use this for \"what's due\" questions.",
+        "graded discussions, planner notes, with submitted/missing/graded status. Use this for \"what's due\" questions. " +
+        "The planner only holds dated work, so assignments with no due date are listed separately in no_due_date.",
       inputSchema: {
         days_ahead: z.number().int().min(0).max(120).default(7).describe("How many days forward from now"),
         days_back: z
@@ -117,15 +121,22 @@ export function registerReadTools(
           .default(0)
           .describe("Also include this many past days (useful for catching missing work)"),
         include_done: z.boolean().default(false).describe("Include items already submitted or marked complete"),
+        include_undated: z
+          .boolean()
+          .default(true)
+          .describe("Also list assignments with no due date from every current course (one extra request per course)"),
       },
       annotations: READ_ONLY,
     },
-    wrap(async ({ days_ahead, days_back, include_done }) => {
+    wrap(async ({ days_ahead, days_back, include_done, include_undated }) => {
       const now = Date.now();
       const start = new Date(now - days_back * 86_400_000).toISOString();
       const end = new Date(now + days_ahead * 86_400_000).toISOString();
-      const items = await canvas.getAll<PlannerItem>("/planner/items", { start_date: start, end_date: end });
-      return items
+      const [items, undated] = await Promise.all([
+        canvas.getAll<PlannerItem>("/planner/items", { start_date: start, end_date: end }),
+        include_undated ? undatedAssignments(include_done) : undefined,
+      ]);
+      const dated = items
         .filter((i) => i.plannable_type !== "announcement")
         .map((i) => {
           const s = i.submissions || undefined;
@@ -152,8 +163,45 @@ export function registerReadTools(
             url: i.html_url ? canvas.webUrl(i.html_url) : undefined,
           });
         });
+      return compact({ items: dated, no_due_date: undated });
     }),
   );
+
+  /** Assignments with no due date never reach the planner (issue #4), so ask each current course for them. */
+  async function undatedAssignments(includeDone: boolean) {
+    const current = await courses.active();
+    const perCourse = await Promise.all(
+      current.map(async (c) => {
+        try {
+          const list = await canvas.getAll<Assignment>(`/courses/${c.id}/assignments`, {
+            include: ["submission"],
+            bucket: "undated",
+          });
+          return list
+            .filter((a) => !a.due_at && (includeDone || !isDone(a.submission)))
+            .map((a) =>
+              compact({
+                course: c.name,
+                course_id: c.id,
+                type: "assignment",
+                id: a.id,
+                title: a.name,
+                points: a.points_possible,
+                done: isDone(a.submission),
+                locked: a.locked_for_user || undefined,
+                missing: a.submission?.missing || undefined,
+                url: a.html_url,
+              }),
+            );
+        } catch (err) {
+          // One course refusing (e.g. a 403) shouldn't hide what's due everywhere else.
+          if (err instanceof CanvasError) return [];
+          throw err;
+        }
+      }),
+    );
+    return perCourse.flat();
+  }
 
   server.registerTool(
     "list_assignments",

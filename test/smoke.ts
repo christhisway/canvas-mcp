@@ -335,10 +335,19 @@ try {
 
   await check("get_upcoming hides done items + announcements, sorts by date", async () => {
     const out = parse(await call("get_upcoming", { days_ahead: 7 }));
-    assert.deepEqual(out.map((i: any) => i.title), ["Factory Pattern Writeup", "Portfolio link"]);
-    assert.match(out[0].url, /\/courses\/101\/assignments\/11$/);
+    assert.deepEqual(out.items.map((i: any) => i.title), ["Factory Pattern Writeup", "Portfolio link"]);
+    assert.match(out.items[0].url, /\/courses\/101\/assignments\/11$/);
     const all = parse(await call("get_upcoming", { days_ahead: 7, include_done: true }));
-    assert.equal(all.length, 3);
+    assert.equal(all.items.length, 3);
+  });
+
+  await check("get_upcoming lists undated assignments from current courses", async () => {
+    const out = parse(await call("get_upcoming", { days_ahead: 7 }));
+    assert.deepEqual(out.no_due_date.map((i: any) => [i.course_id, i.title]), [[202, "Group report"]]);
+    const all = parse(await call("get_upcoming", { days_ahead: 7, include_done: true }));
+    assert.deepEqual(all.no_due_date.map((i: any) => [i.title, i.done]), [["Group report", false], ["Reading response", true]]);
+    const off = parse(await call("get_upcoming", { days_ahead: 7, include_undated: false }));
+    assert.equal(off.no_due_date, undefined);
   });
 
   await check("resolves a course by code and lists assignments", async () => {

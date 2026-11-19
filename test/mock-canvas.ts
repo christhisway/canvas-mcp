@@ -90,6 +90,9 @@ export async function startMockCanvas() {
     "11": { id: 11, course_id: 101, name: "Factory Pattern Writeup", description: "<p>Write 500 words on <em>factories</em>.</p>", due_at: iso(2), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], allowed_extensions: ["pdf"], allowed_attempts: -1, html_url: "https://canvas.test/courses/101/assignments/11" },
     "12": { id: 12, course_id: 101, name: "Reflection", description: "<p>Reflect.</p>", due_at: iso(-1), lock_at: null, unlock_at: null, points_possible: 5, submission_types: ["online_text_entry"], allowed_attempts: 1, html_url: "https://canvas.test/courses/101/assignments/12" },
     "13": { id: 13, course_id: 101, name: "Portfolio link", description: null, due_at: iso(5), lock_at: null, unlock_at: null, points_possible: 10, submission_types: ["online_url"], html_url: "https://canvas.test/courses/101/assignments/13" },
+    // No due date, so never on the planner (issue #4); one still to do, one already handed in.
+    "15": { id: 15, course_id: 202, name: "Group report", description: null, due_at: null, lock_at: null, unlock_at: null, points_possible: 50, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/202/assignments/15" },
+    "16": { id: 16, course_id: 202, name: "Reading response", description: null, due_at: null, lock_at: null, unlock_at: null, points_possible: 5, submission_types: ["online_text_entry"], html_url: "https://canvas.test/courses/202/assignments/16" },
     "14": { id: 14, course_id: 101, name: "Observer Pattern Writeup", description: null, due_at: iso(-4), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/101/assignments/14" },
   };
   const mySubs: Record<string, any> = {
@@ -98,10 +101,17 @@ export async function startMockCanvas() {
     "13": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
     // Past due, never handed in, not graded: invisible in the current score (issue #2).
     "14": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null, missing: true },
+    "15": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
+    "16": { workflow_state: "submitted", submitted_at: iso(-3), score: null, grade: null, attempt: 1 },
   };
 
-  app.get("/api/v1/courses/:cid/assignments", (_req, res) => {
-    res.json(Object.values(assignments).map((a) => ({ ...a, submission: mySubs[a.id] })));
+  app.get("/api/v1/courses/:cid/assignments", (req, res) => {
+    res.json(
+      Object.values(assignments)
+        .filter((a) => String(a.course_id) === req.params.cid)
+        .filter((a) => req.query.bucket !== "undated" || a.due_at === null)
+        .map((a) => ({ ...a, submission: mySubs[a.id] })),
+    );
   });
   app.get("/api/v1/courses/:cid/assignments/:aid", (req, res) => {
     const a = assignments[req.params.aid];
