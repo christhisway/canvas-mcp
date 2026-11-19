@@ -255,3 +255,34 @@ export interface CalendarEvent {
   workflow_state?: string;
   html_url?: string;
 }
+
+export interface ConversationAttachment {
+  display_name?: string;
+  filename?: string;
+  url?: string;
+}
+
+export interface ConversationMessage {
+  id: number;
+  author_id: number;
+  created_at: string;
+  body: string;
+  attachments?: ConversationAttachment[];
+  media_comment?: { display_name?: string; url?: string } | null;
+}
+
+export interface Conversation {
+  id: number;
+  subject: string | null;
+  workflow_state: "read" | "unread" | "archived" | string;
+  last_message?: string | null;
+  last_message_at?: string | null;
+  last_authored_message_at?: string | null;
+  message_count?: number;
+  participants?: Array<{ id: number; name: string }>;
+  context_name?: string | null;
+  context_code?: string | null;
+  properties?: string[];
+  /** Present on GET /conversations/:id, newest first. */
+  messages?: ConversationMessage[];
+}

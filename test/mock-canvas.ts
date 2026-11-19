@@ -31,6 +31,8 @@ export async function startMockCanvas() {
     /** context_codes[] of each /calendar_events request. */
     eventRequests: [] as string[][],
     moduleItemsFetched: new Set<string>(),
+    /** GET /conversations/:id requests that didn't pass auto_mark_as_read=false (each one marks it read). */
+    conversationsMarkedRead: 0,
   };
 
   const now = Date.now();
@@ -341,6 +343,54 @@ export async function startMockCanvas() {
         { id: 405, deleted: true, created_at: iso(-1) },
       ],
     });
+  });
+
+  // Inbox (GitHub #9). User 1 is the student. Like Canvas, fetching a conversation marks it read unless
+  // auto_mark_as_read=false is passed.
+  const conversations = [
+    { id: 70, course_id: 101, subject: "Midterm room change", workflow_state: "unread", context_name: "Software Design",
+      participants: [{ id: 1, name: "Owner Student" }, { id: 50, name: "Dana Ortiz" }], properties: ["attachments"],
+      messages: [
+        { id: 3, author_id: 50, created_at: iso(-1), body: "See the attached seating chart.", attachments: [{ display_name: "seating.pdf", url: "https://canvas.test/files/77/download" }] },
+        { id: 2, author_id: 1, created_at: iso(-1.5), body: "Thanks! Is it still at 2pm?" },
+        { id: 1, author_id: 50, created_at: iso(-2), body: "Heads up:\n\nthe midterm   moves to Sitterson 014." },
+      ] },
+    { id: 71, course_id: 101, subject: "Lab group 4 check-in", workflow_state: "read", context_name: "Software Design",
+      participants: [{ id: 1, name: "Owner Student" }, { id: 51, name: "Sam Park" }, { id: 52, name: "Riley Classmate" }],
+      messages: [{ id: 4, author_id: 51, created_at: iso(-4), body: "How is the lab going?" }] },
+    { id: 72, course_id: 202, subject: "Essay extension", workflow_state: "read", context_name: "Philosophy of Mind",
+      participants: [{ id: 1, name: "Owner Student" }, { id: 70, name: "Prof. B" }],
+      messages: [{ id: 5, author_id: 1, created_at: iso(-6), body: "Could I have two more days for Essay 2?" }] },
+  ];
+  const conversationJson = (v: (typeof conversations)[number], full: boolean) => {
+    const newest = [...v.messages].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const mine = newest.find((m) => m.author_id === 1);
+    return {
+      id: v.id, subject: v.subject, workflow_state: v.workflow_state, context_name: v.context_name, participants: v.participants,
+      properties: v.properties ?? [], message_count: v.messages.length, last_message: newest[0].body, last_message_at: newest[0].created_at,
+      last_authored_message_at: mine?.created_at ?? null, messages: full ? newest : undefined,
+    };
+  };
+  app.get("/api/v1/conversations", (req, res) => {
+    const filter = ([] as string[]).concat((req.query["filter[]"] as string | string[]) ?? []);
+    const scope = String(req.query.scope ?? "inbox");
+    const list = conversations
+      .filter((v) => filter.length === 0 || filter.includes(`course_${v.course_id}`))
+      .filter((v) => scope !== "unread" || v.workflow_state === "unread")
+      .filter((v) => scope !== "sent" || v.messages.some((m) => m.author_id === 1))
+      .filter((v) => scope !== "archived" && scope !== "starred")
+      .map((v) => conversationJson(v, false))
+      .sort((a, b) => b.last_message_at.localeCompare(a.last_message_at));
+    res.json(list.slice(0, Number(req.query.per_page ?? 10)));
+  });
+  app.get("/api/v1/conversations/:id", (req, res) => {
+    const v = conversations.find((x) => String(x.id) === req.params.id);
+    if (!v) return res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
+    if (req.query.auto_mark_as_read !== "false") {
+      state.conversationsMarkedRead++;
+      v.workflow_state = "read";
+    }
+    res.json(conversationJson(v, true));
   });
 
   // The calling student's submissions in a course (no student_ids, so Canvas means "me").

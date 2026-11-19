@@ -307,8 +307,8 @@ try {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
-      "course_people", "get_assignment", "get_discussion", "get_feedback", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
-      "list_announcements", "list_assignments", "list_courses", "list_discussions", "list_events", "list_modules", "read_file", "recently_graded",
+      "course_people", "get_assignment", "get_discussion", "get_feedback", "get_grades", "get_message", "get_syllabus", "get_upcoming", "grade_whatif",
+      "list_announcements", "list_assignments", "list_courses", "list_discussions", "list_events", "list_messages", "list_modules", "read_file", "recently_graded",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
   });
@@ -517,6 +517,37 @@ try {
     assert.equal(search.next.title, "Factory Pattern Writeup");
     const none = parse(await call("list_modules", { course: "PHIL 230" }));
     assert.match(none.note, /no modules/);
+  });
+
+  await check("list_messages: inbox, unread, sent and course filter, with previews", async () => {
+    const inbox = parse(await call("list_messages", {}));
+    assert.deepEqual(inbox.conversations.map((v: any) => [v.id, v.unread]), [[70, true], [71, undefined], [72, undefined]]);
+    const room = inbox.conversations[0];
+    assert.deepEqual(room.with, ["Dana Ortiz"]);
+    assert.equal(room.course, "Software Design");
+    assert.equal(room.attachments, true);
+    assert.equal(room.preview, "See the attached seating chart.");
+    assert.equal(room.messages, 3);
+    const unread = parse(await call("list_messages", { scope: "unread" }));
+    assert.deepEqual(unread.conversations.map((v: any) => v.id), [70]);
+    const phil = parse(await call("list_messages", { course: "PHIL 230" }));
+    assert.deepEqual(phil.conversations.map((v: any) => v.subject), ["Essay extension"]);
+    const sent = parse(await call("list_messages", { scope: "sent", limit: 1 }));
+    assert.deepEqual(sent.conversations.map((v: any) => v.id), [70]);
+    const none = parse(await call("list_messages", { scope: "archived" }));
+    assert.match(none.note, /No conversations in archived/);
+  });
+
+  await check("get_message: full thread oldest first with attachments, and never marks it read", async () => {
+    const out = parse(await call("get_message", { conversation_id: 70 }));
+    assert.deepEqual(out.messages.map((m: any) => m.from), ["Dana Ortiz", "you", "Dana Ortiz"]);
+    assert.match(out.messages[0].text, /Sitterson 014/);
+    assert.deepEqual(out.messages[2].attachments, [{ name: "seating.pdf", url: "https://canvas.test/files/77/download" }]);
+    assert.deepEqual(out.participants, ["you", "Dana Ortiz"]);
+    assert.equal(out.unread, true);
+    assert.equal(mock.state.conversationsMarkedRead, 0, "get_message must pass auto_mark_as_read=false");
+    const still = parse(await call("list_messages", { scope: "unread" }));
+    assert.deepEqual(still.conversations.map((v: any) => v.id), [70]);
   });
 
   await check("get_grades computes group percentages and shows final score + missing work", async () => {

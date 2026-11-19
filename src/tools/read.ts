@@ -10,7 +10,7 @@ import {
 import { modulesWithItems } from "../modules.js";
 import { findSyllabus } from "../syllabus.js";
 import { compact, errorResult, htmlToText, json, makeDateFormatter } from "../format.js";
-import type { Assignment, AssignmentGroup, CalendarEvent, CanvasFile, Course, CourseUser, DiscussionTopic, DiscussionView, DiscussionEntry, GradingStandard, Group, Module, ModuleItem, PlannerItem, Submission } from "../types.js";
+import type { Assignment, AssignmentGroup, CalendarEvent, CanvasFile, Conversation, Course, CourseUser, DiscussionTopic, DiscussionView, DiscussionEntry, GradingStandard, Group, Module, ModuleItem, PlannerItem, Submission } from "../types.js";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
@@ -1073,6 +1073,97 @@ export function registerReadTools(
     }),
   );
 
+  const myId = async () => (await optional(canvas.get<{ id: number }>("/users/self"), undefined))?.id;
+
+  server.registerTool(
+    "list_messages",
+    {
+      title: "List inbox messages",
+      description:
+        "Conversations in the student's Canvas inbox (messages from instructors and TAs that may never appear " +
+        "as announcements): subject, participants, course, last message date, unread flag and a short preview. " +
+        "Use get_message to read a whole thread. Reading never marks anything as read.",
+      inputSchema: {
+        scope: z.enum(["inbox", "unread", "sent", "archived", "starred"]).default("inbox").describe("Which mailbox"),
+        course: courseRef.optional().describe("Only conversations in this course"),
+        limit: z.number().int().min(1).max(100).default(20).describe("How many conversations, newest first"),
+      },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ scope, course, limit }) => {
+      const c = course ? await courses.resolve(course) : undefined;
+      const [list, me] = await Promise.all([
+        canvas.get<Conversation[]>("/conversations", {
+          scope: scope === "inbox" ? undefined : scope,
+          filter: c ? [`course_${c.id}`] : undefined,
+          per_page: limit,
+        }),
+        myId(),
+      ]);
+      const rows = list.slice(0, limit).map((v) =>
+        compact({
+          id: v.id,
+          subject: v.subject || "(no subject)",
+          course: v.context_name ?? undefined,
+          with: (v.participants ?? []).filter((p) => p.id !== me).map((p) => p.name),
+          last_message: date(scope === "sent" ? v.last_authored_message_at ?? v.last_message_at : v.last_message_at),
+          messages: v.message_count,
+          unread: v.workflow_state === "unread" || undefined,
+          attachments: v.properties?.includes("attachments") || undefined,
+          preview: v.last_message ? clip(v.last_message.replace(/\s+/g, " ").trim(), 200) : undefined,
+        }),
+      );
+      return compact({
+        course: c ? `${c.course_code} — ${c.name}` : undefined,
+        scope,
+        conversations: rows,
+        note: rows.length ? undefined : `No conversations in ${scope}${c ? " for this course" : ""}.`,
+      });
+    }),
+  );
+
+  server.registerTool(
+    "get_message",
+    {
+      title: "Read inbox thread",
+      description:
+        "One Canvas inbox conversation in full, oldest message first, with authors, dates and attachment links. " +
+        "Doesn't mark it as read.",
+      inputSchema: { conversation_id: z.number().int().describe("Conversation id (from list_messages)") },
+      annotations: READ_ONLY,
+    },
+    wrap(async ({ conversation_id }) => {
+      const [v, me] = await Promise.all([
+        // Canvas marks a conversation read when it's fetched unless told not to; the connector changes nothing.
+        canvas.get<Conversation>(`/conversations/${conversation_id}`, { auto_mark_as_read: false }),
+        myId(),
+      ]);
+      const names = new Map((v.participants ?? []).map((p) => [p.id, p.name]));
+      const MAX_MESSAGES = 60;
+      const all = [...(v.messages ?? [])].sort((a, b) => a.created_at.localeCompare(b.created_at));
+      const shown = all.slice(-MAX_MESSAGES);
+      return compact({
+        id: v.id,
+        subject: v.subject || "(no subject)",
+        course: v.context_name ?? undefined,
+        participants: (v.participants ?? []).map((p) => (p.id === me ? "you" : p.name)),
+        unread: v.workflow_state === "unread" || undefined,
+        messages: shown.map((m) =>
+          compact({
+            from: m.author_id === me ? "you" : names.get(m.author_id) ?? "unknown",
+            at: date(m.created_at),
+            text: clip(m.body ?? "", 6000),
+            attachments: m.attachments?.length
+              ? m.attachments.map((f) => compact({ name: f.display_name ?? f.filename, url: f.url }))
+              : undefined,
+            media: m.media_comment ? compact({ name: m.media_comment.display_name, url: m.media_comment.url }) : undefined,
+          }),
+        ),
+        note: all.length > shown.length ? `Showing the latest ${shown.length} of ${all.length} messages.` : undefined,
+      });
+    }),
+  );
+
   server.registerTool(
     "get_syllabus",
     {
@@ -1197,4 +1288,8 @@ function requirementLabel(i: ModuleItem): string | undefined {
   };
   if (r.type === "min_score") return `score at least ${r.min_score}`;
   return labels[r.type] ?? r.type;
+}
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
