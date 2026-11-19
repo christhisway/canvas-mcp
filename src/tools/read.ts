@@ -4,7 +4,7 @@ import { CanvasError, optional, type CanvasClient } from "../canvas.js";
 import { hasEnded, type CourseDirectory } from "../courses.js";
 import { fileKind, findFiles, humanSize, MAX_FILE_BYTES, pdfText, pickFile, plainText } from "../files.js";
 import {
-  CANVAS_DEFAULT_SCALE, currentView, finalView, gradeCourse, letterFor, parseTarget, round2, scaleFrom, solveTarget,
+  CANVAS_DEFAULT_SCALE, currentView, finalView, gradeCourse, gradeGroup, letterFor, parseTarget, round2, scaleFrom, solveTarget,
   toGradeGroups, type GradeGroup, type GradeItem,
 } from "../grades.js";
 import { modulesWithItems } from "../modules.js";
@@ -116,7 +116,10 @@ export function registerReadTools(
       description:
         "Everything on the student's Canvas planner in a date window across all courses: assignments, quizzes, " +
         "graded discussions, planner notes, with submitted/missing/graded status. Use this for \"what's due\" questions. " +
-        "The planner only holds dated work, so assignments with no due date are listed separately in no_due_date.",
+        "The planner only holds dated work, so assignments with no due date are listed separately in no_due_date. " +
+        "For quizzes and graded discussions, id is the quiz or topic id; pass assignment_id to get_assignment, " +
+        "get_feedback and grade_whatif. marked_done means the student ticked it in the planner but Canvas still " +
+        "marks it missing, so it isn't counted as done.",
       inputSchema: {
         days_ahead: z.number().int().min(0).max(120).default(7).describe("How many days forward from now"),
         days_back: z
@@ -146,22 +149,28 @@ export function registerReadTools(
         .filter((i) => i.plannable_type !== "announcement")
         .map((i) => {
           const s = i.submissions || undefined;
-          const done = Boolean(s?.submitted || s?.excused || i.planner_override?.marked_complete);
-          return { item: i, done };
+          const ticked = Boolean(i.planner_override?.marked_complete);
+          // A planner checkmark doesn't hand anything in: missing work stays not done and visible (issue #18).
+          const done = Boolean(s?.submitted || s?.excused || (ticked && !s?.missing));
+          return { item: i, done, ticked };
         })
         .filter(({ done }) => include_done || !done)
         .sort((a, b) => a.item.plannable_date.localeCompare(b.item.plannable_date))
-        .map(({ item: i, done }) => {
+        .map(({ item: i, done, ticked }) => {
           const s = i.submissions || undefined;
+          // Quizzes and graded discussions have their own ids; get_assignment etc. need the assignment's (issue #19).
+          const assignmentId = i.plannable_type === "assignment" ? undefined : i.plannable.assignment_id ?? undefined;
           return compact({
             course: i.context_name,
             course_id: i.course_id,
             type: i.plannable_type,
             id: i.plannable_id,
+            assignment_id: assignmentId,
             title: i.plannable.title,
             due: date(i.plannable.due_at ?? i.plannable.todo_date ?? i.plannable_date),
             points: i.plannable.points_possible,
             done,
+            marked_done: (ticked && !done) || undefined,
             missing: s?.missing || undefined,
             late: s?.late || undefined,
             graded: s?.graded || undefined,
@@ -252,7 +261,15 @@ export function registerReadTools(
     wrap(async ({ course, assignment_id }) => {
       const c = await courses.resolve(course);
       const [a, sub] = await Promise.all([
-        canvas.get<Assignment>(`/courses/${c.id}/assignments/${assignment_id}`),
+        canvas.get<Assignment>(`/courses/${c.id}/assignments/${assignment_id}`).catch((err) => {
+          if (err instanceof CanvasError && err.status === 404) {
+            throw new Error(
+              `No assignment ${assignment_id} in ${c.course_code}. A quiz or discussion id isn't an assignment id; ` +
+                "use the assignment_id that get_upcoming gives for those.",
+            );
+          }
+          throw err;
+        }),
         canvas
           .get<Submission>(`/courses/${c.id}/assignments/${assignment_id}/submissions/self`, {
             include: ["submission_comments"],
@@ -480,10 +497,11 @@ export function registerReadTools(
     {
       title: "Get grades",
       description:
-        "Grade breakdown for one course: overall scores, assignment groups with weights, each graded " +
-        "assignment's score, and assignments Canvas marks missing. " +
+        "Grade breakdown for one course: overall scores, assignment groups with weights and drop rules, each " +
+        "graded assignment's score, and assignments Canvas marks missing. " +
         SCORES_NOTE +
-        " group_score_percent also counts graded work only; check each group's missing list.",
+        " group_score_percent also counts graded work only, after drop rules (dropped_now) and leaving out " +
+        "assignments marked excluded_from_grade, as Canvas does; check each group's missing list.",
       inputSchema: { course: courseRef },
       annotations: READ_ONLY,
     },
@@ -492,19 +510,26 @@ export function registerReadTools(
       const groups = await canvas.getAll<AssignmentGroup>(`/courses/${c.id}/assignment_groups`, {
         include: ["assignments", "submission"],
       });
+      // Same arithmetic as grade_whatif (issue #14), so drop rules and omitted assignments match Canvas.
+      const results = toGradeGroups(groups).map((g) => gradeGroup(g, currentView));
       const missing = (g: AssignmentGroup) => (g.assignments ?? []).filter((a) => a.submission?.missing);
       return compact({
         course: `${c.course_code} — ${c.name}`,
         ...courseScores(c),
         missing_count: groups.reduce((n, g) => n + missing(g).length, 0) || undefined,
-        groups: groups.map((g) => {
-          const graded = (g.assignments ?? []).filter((a) => a.submission && a.submission.score !== null);
-          const earned = graded.reduce((sum, a) => sum + (a.submission?.score ?? 0), 0);
-          const possible = graded.reduce((sum, a) => sum + (a.points_possible ?? 0), 0);
+        groups: groups.map((g, i) => {
+          const r = results[i];
+          const dropped = new Set(r.dropped.map((d) => d.id));
+          // Canvas sometimes leaves score out entirely, so `!= null` (issue #13).
+          const graded = (g.assignments ?? []).filter((a) => a.submission?.score != null);
           return compact({
             name: g.name,
             weight_percent: g.group_weight || undefined,
-            group_score_percent: possible > 0 ? Math.round((earned / possible) * 1000) / 10 : undefined,
+            group_score_percent: r.percent === null ? undefined : Math.round(r.percent * 10) / 10,
+            drops: r.group.drop_lowest || r.group.drop_highest
+              ? compact({ lowest: r.group.drop_lowest || undefined, highest: r.group.drop_highest || undefined })
+              : undefined,
+            dropped_now: r.dropped.length ? r.dropped.map((d) => d.name) : undefined,
             graded: graded.map((a) =>
               compact({
                 name: a.name,
@@ -512,6 +537,8 @@ export function registerReadTools(
                 out_of: a.points_possible,
                 grade: a.submission?.grade,
                 late: a.submission?.late || undefined,
+                dropped: dropped.has(a.id) || undefined,
+                excluded_from_grade: a.omit_from_final_grade || a.grading_type === "not_graded" || undefined,
               }),
             ),
             ungraded_count: (g.assignments ?? []).length - graded.length || undefined,
@@ -1092,20 +1119,35 @@ export function registerReadTools(
     },
     wrap(async ({ scope, course, limit }) => {
       const c = course ? await courses.resolve(course) : undefined;
-      const [list, me] = await Promise.all([
+      const filter = c ? [`course_${c.id}`] : undefined;
+      let [list, me] = await Promise.all([
         canvas.get<Conversation[]>("/conversations", {
           scope: scope === "inbox" ? undefined : scope,
-          filter: c ? [`course_${c.id}`] : undefined,
+          filter,
           per_page: limit,
         }),
         myId(),
       ]);
+      let note: string | undefined;
+      if (scope === "sent" && list.length === 0) {
+        // Real Canvas has answered scope=sent with nothing for an account with sent messages (issue #15), so
+        // fall back to the inbox and archive, keeping conversations the student has written in.
+        const [inbox, archived] = await Promise.all([
+          canvas.getAll<Conversation>("/conversations", { filter }),
+          optional(canvas.getAll<Conversation>("/conversations", { scope: "archived", filter }), []),
+        ]);
+        const seen = new Set<number>();
+        list = [...inbox, ...archived]
+          .filter((v) => v.last_authored_message_at && !seen.has(v.id) && seen.add(v.id))
+          .sort((a, b) => b.last_authored_message_at!.localeCompare(a.last_authored_message_at!));
+        if (list.length) note = "Canvas's sent mailbox came back empty, so these are conversations the student has written in.";
+      }
       const rows = list.slice(0, limit).map((v) =>
         compact({
           id: v.id,
           subject: v.subject || "(no subject)",
           course: v.context_name ?? undefined,
-          with: (v.participants ?? []).filter((p) => p.id !== me).map((p) => p.name),
+          with: withSummary(v, me),
           last_message: date(scope === "sent" ? v.last_authored_message_at ?? v.last_message_at : v.last_message_at),
           messages: v.message_count,
           unread: v.workflow_state === "unread" || undefined,
@@ -1117,7 +1159,7 @@ export function registerReadTools(
         course: c ? `${c.course_code} — ${c.name}` : undefined,
         scope,
         conversations: rows,
-        note: rows.length ? undefined : `No conversations in ${scope}${c ? " for this course" : ""}.`,
+        note: rows.length ? note : `No conversations in ${scope}${c ? " for this course" : ""}.`,
       });
     }),
   );
@@ -1139,6 +1181,7 @@ export function registerReadTools(
         myId(),
       ]);
       const names = new Map((v.participants ?? []).map((p) => [p.id, p.name]));
+      const others = (v.participants ?? []).filter((p) => p.id !== me);
       const MAX_MESSAGES = 60;
       const all = [...(v.messages ?? [])].sort((a, b) => a.created_at.localeCompare(b.created_at));
       const shown = all.slice(-MAX_MESSAGES);
@@ -1146,7 +1189,11 @@ export function registerReadTools(
         id: v.id,
         subject: v.subject || "(no subject)",
         course: v.context_name ?? undefined,
-        participants: (v.participants ?? []).map((p) => (p.id === me ? "you" : p.name)),
+        // A class-wide message lists the whole class; give a count instead of a roster (issue #16).
+        participants: others.length <= MAX_NAMED
+          ? (v.participants ?? []).map((p) => (p.id === me ? "you" : p.name))
+          : undefined,
+        participant_count: others.length > MAX_NAMED ? others.length + 1 : undefined,
         unread: v.workflow_state === "unread" || undefined,
         messages: shown.map((m) =>
           compact({
@@ -1171,13 +1218,17 @@ export function registerReadTools(
       description:
         "The course's syllabus as text. If the syllabus page is empty, looks for a page, file or module item " +
         "with \"syllabus\" in its name: a matching page's text is returned, and files come back in matches " +
-        "with a file_id to pass to read_file.",
-      inputSchema: { course: courseRef },
+        "with a file_id to pass to read_file. Files linked from the syllabus are listed in linked_files with a " +
+        "file_id. Long syllabi come back in parts: follow the note and call again with from_char.",
+      inputSchema: {
+        course: courseRef,
+        from_char: z.number().int().min(0).default(0).describe("Where to start in a long syllabus (from the previous note)"),
+      },
       annotations: READ_ONLY,
     },
-    wrap(async ({ course }) => {
+    wrap(async ({ course, from_char }) => {
       const c = await courses.resolve(course);
-      return { course: `${c.course_code} — ${c.name}`, ...(await findSyllabus(canvas, c)) };
+      return compact({ course: `${c.course_code} — ${c.name}`, ...(await findSyllabus(canvas, c, from_char)) });
     }),
   );
 
@@ -1288,6 +1339,16 @@ function requirementLabel(i: ModuleItem): string | undefined {
   };
   if (r.type === "min_score") return `score at least ${r.min_score}`;
   return labels[r.type] ?? r.type;
+}
+
+/** Above this many other people, a conversation's participants are summarised rather than listed (issue #16). */
+const MAX_NAMED = 5;
+
+/** The other participants by name, or "First Name + N others" for a class-wide message. */
+function withSummary(v: Conversation, me: number | undefined): string[] | string {
+  const others = (v.participants ?? []).filter((p) => p.id !== me);
+  if (others.length <= MAX_NAMED) return others.map((p) => p.name);
+  return `${others[0].name} + ${others.length - 1} others`;
 }
 
 function clip(text: string, max: number): string {

@@ -33,6 +33,10 @@ export async function startMockCanvas() {
     moduleItemsFetched: new Set<string>(),
     /** GET /conversations/:id requests that didn't pass auto_mark_as_read=false (each one marks it read). */
     conversationsMarkedRead: 0,
+    /** scope= of each GET /conversations request ("inbox" when none was sent). */
+    conversationScopes: [] as string[],
+    /** Answer scope=sent with nothing, as real Canvas did in issue #15. */
+    sentScopeEmpty: false,
   };
 
   const now = Date.now();
@@ -119,7 +123,14 @@ export async function startMockCanvas() {
   app.get("/api/v1/courses/:id", (req, res) => {
     const c = courses.find((x) => String(x.id) === req.params.id);
     if (!c) return res.status(404).json({ errors: [{ message: "The specified resource does not exist." }] });
-    const syllabus: Record<number, string | null> = { 202: "<h2>Syllabus</h2><p>Exams are <b>40%</b>.</p>", 101: "<p> </p>" };
+    // PHIL 230's page is too long for one reply; HIST 105's is nothing but file links (issue #20).
+    const schedule = Array.from({ length: 300 }, (_, i) => `<p>Week ${i + 1}: reading and discussion of the assigned chapter.</p>`).join("");
+    const syllabus: Record<number, string | null> = {
+      202: `<h2>Syllabus</h2><p>Exams are <b>40%</b>.</p>${schedule}<p>Final exam: December 12.</p>`,
+      101: "<p> </p>",
+      404: '<p>Syllabus:</p><p><a class="instructure_file_link" title="Notes template.docx" href="/courses/404/files/702/download">Notes template.docx</a></p>' +
+        '<p><a href="https://canvas.test/courses/404/files/701?wrap=1" data-api-endpoint="https://canvas.test/api/v1/courses/404/files/701">HIST105_Syllabus.pdf</a></p>',
+    };
     res.json({ ...c, syllabus_body: syllabus[c.id] ?? null });
   });
 
@@ -212,6 +223,8 @@ export async function startMockCanvas() {
     ] },
     // The graded discussion's assignment (GitHub #7).
     "26": { id: 26, course_id: 202, name: "Week 5: Chinese Room", description: null, due_at: iso(2), lock_at: null, unlock_at: null, points_possible: 10, submission_types: ["discussion_topic"], html_url: "https://canvas.test/courses/202/assignments/26" },
+    // Left out of the grade (omit_from_final_grade), as practice quizzes often are (issue #14).
+    "18": { id: 18, course_id: 101, name: "Practice quiz", description: null, due_at: iso(-25), lock_at: null, unlock_at: null, points_possible: 2, submission_types: ["online_quiz"], omit_from_final_grade: true, html_url: "https://canvas.test/courses/101/assignments/18" },
     "14": { id: 14, course_id: 101, name: "Observer Pattern Writeup", description: null, due_at: iso(-4), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/101/assignments/14" },
   };
   const mySubs: Record<string, any> = {
@@ -219,7 +232,9 @@ export async function startMockCanvas() {
     "12": { workflow_state: "graded", submitted_at: iso(-2), graded_at: iso(-1), score: 5, grade: "5", attempt: 1, submission_comments: [{ author_name: "TA", comment: "Nice work", created_at: iso(-1) }] },
     "13": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
     // Past due, never handed in, not graded: invisible in the current score (issue #2).
-    "14": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null, missing: true },
+    // Canvas sometimes leaves score out entirely rather than sending null (issue #13).
+    "14": { workflow_state: "unsubmitted", submitted_at: null, grade: null, attempt: null, missing: true },
+    "18": { workflow_state: "graded", submitted_at: iso(-25), graded_at: iso(-24), score: 0, grade: "0", attempt: 1 },
     "15": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
     "26": { workflow_state: "submitted", submitted_at: iso(-1), score: null, grade: null, attempt: 1 },
     "17": { workflow_state: "graded", submitted_at: iso(-11), graded_at: iso(-9), score: 17.8, grade: "17.8", attempt: 1 },
@@ -361,6 +376,10 @@ export async function startMockCanvas() {
     { id: 72, course_id: 202, subject: "Essay extension", workflow_state: "read", context_name: "Philosophy of Mind",
       participants: [{ id: 1, name: "Owner Student" }, { id: 70, name: "Prof. B" }],
       messages: [{ id: 5, author_id: 1, created_at: iso(-6), body: "Could I have two more days for Essay 2?" }] },
+    // Sent to the whole class, so every classmate is a participant (issue #16).
+    { id: 73, course_id: 101, subject: "Office hours moved", workflow_state: "read", context_name: "Software Design",
+      participants: [{ id: 50, name: "Dana Ortiz" }, { id: 1, name: "Owner Student" }, ...Array.from({ length: 8 }, (_, i) => ({ id: 200 + i, name: `Classmate ${i + 1}` }))],
+      messages: [{ id: 6, author_id: 50, created_at: iso(-8), body: "Office hours are in room 011 this week." }] },
   ];
   const conversationJson = (v: (typeof conversations)[number], full: boolean) => {
     const newest = [...v.messages].sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -374,6 +393,8 @@ export async function startMockCanvas() {
   app.get("/api/v1/conversations", (req, res) => {
     const filter = ([] as string[]).concat((req.query["filter[]"] as string | string[]) ?? []);
     const scope = String(req.query.scope ?? "inbox");
+    state.conversationScopes.push(scope);
+    if (scope === "sent" && state.sentScopeEmpty) return res.json([]);
     const list = conversations
       .filter((v) => filter.length === 0 || filter.includes(`course_${v.course_id}`))
       .filter((v) => scope !== "unread" || v.workflow_state === "unread")
@@ -411,7 +432,7 @@ export async function startMockCanvas() {
     const groups: Record<string, unknown[]> = {
       "101": [
         { id: 1, name: "Writeups", group_weight: 60, rules: {}, assignments: withSubs(["17", "11", "14"]) },
-        { id: 2, name: "Participation", group_weight: 40, rules: {}, assignments: withSubs(["12"]) },
+        { id: 2, name: "Participation", group_weight: 40, rules: {}, assignments: withSubs(["12", "18"]) },
       ],
       "202": [
         { id: 3, name: "Quizzes", group_weight: 0, rules: { drop_lowest: 1 }, assignments: withSubs(["21", "22", "23", "24"]) },
@@ -432,7 +453,9 @@ export async function startMockCanvas() {
     res.json([
       { plannable_type: "assignment", plannable_id: 13, plannable_date: iso(5), course_id: 101, context_name: "Software Design", html_url: "/courses/101/assignments/13", plannable: { title: "Portfolio link", due_at: iso(5), points_possible: 10 }, submissions: { submitted: false, missing: false } },
       { plannable_type: "assignment", plannable_id: 11, plannable_date: iso(2), course_id: 101, context_name: "Software Design", html_url: "/courses/101/assignments/11", plannable: { title: "Factory Pattern Writeup", due_at: iso(2), points_possible: 20 }, submissions: { submitted: false, missing: false } },
-      { plannable_type: "quiz", plannable_id: 99, plannable_date: iso(1), course_id: 202, context_name: "Philosophy of Mind", html_url: "/courses/202/quizzes/99", plannable: { title: "Chinese Room quiz", due_at: iso(1), points_possible: 10 }, submissions: { submitted: true } },
+      { plannable_type: "quiz", plannable_id: 99, plannable_date: iso(1), course_id: 202, context_name: "Philosophy of Mind", html_url: "/courses/202/quizzes/99", plannable: { title: "Chinese Room quiz", due_at: iso(1), points_possible: 10, assignment_id: 27 }, submissions: { submitted: true } },
+      // Ticked in the planner but never posted, so Canvas still marks it missing (issue #18).
+      { plannable_type: "discussion_topic", plannable_id: 41, plannable_date: iso(0.5), course_id: 202, context_name: "Philosophy of Mind", html_url: "/courses/202/discussion_topics/41", plannable: { title: "Week 4: Zombies", due_at: iso(0.5), points_possible: 0, assignment_id: 28 }, submissions: { submitted: false, missing: true }, planner_override: { marked_complete: true } },
       { plannable_type: "announcement", plannable_id: 5, plannable_date: iso(0), course_id: 202, plannable: { title: "hidden" }, submissions: false },
     ]);
   });

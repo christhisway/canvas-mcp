@@ -335,10 +335,23 @@ try {
 
   await check("get_upcoming hides done items + announcements, sorts by date", async () => {
     const out = parse(await call("get_upcoming", { days_ahead: 7 }));
-    assert.deepEqual(out.items.map((i: any) => i.title), ["Factory Pattern Writeup", "Portfolio link"]);
-    assert.match(out.items[0].url, /\/courses\/101\/assignments\/11$/);
+    assert.deepEqual(out.items.map((i: any) => i.title), ["Week 4: Zombies", "Factory Pattern Writeup", "Portfolio link"]);
+    assert.match(out.items[1].url, /\/courses\/101\/assignments\/11$/);
     const all = parse(await call("get_upcoming", { days_ahead: 7, include_done: true }));
-    assert.equal(all.items.length, 3);
+    assert.equal(all.items.length, 4);
+  });
+
+  await check("get_upcoming: a planner checkmark doesn't hide missing work; quizzes carry assignment_id", async () => {
+    const all = parse(await call("get_upcoming", { days_ahead: 7, include_done: true }));
+    const zombies = all.items.find((i: any) => i.title === "Week 4: Zombies");
+    assert.deepEqual([zombies.done, zombies.marked_done, zombies.missing, zombies.assignment_id], [false, true, true, 28]);
+    const quiz = all.items.find((i: any) => i.type === "quiz");
+    assert.deepEqual([quiz.id, quiz.assignment_id], [99, 27]);
+    const plain = all.items.find((i: any) => i.title === "Portfolio link");
+    assert.equal(plain.assignment_id, undefined);
+    const wrongId: any = await call("get_assignment", { course: "PHIL 230", assignment_id: 99 });
+    assert.equal(wrongId.isError, true);
+    assert.match(wrongId.content[0].text, /use the assignment_id that get_upcoming gives/);
   });
 
   await check("get_upcoming lists undated assignments from current courses", async () => {
@@ -353,7 +366,7 @@ try {
   await check("resolves a course by code and lists assignments", async () => {
     const out = parse(await call("list_assignments", { course: "cs240" }));
     assert.equal(out.course_id, 101);
-    assert.equal(out.assignments.length, 5);
+    assert.equal(out.assignments.length, 6);
   });
 
   await check("ambiguous / unknown course gives a helpful error", async () => {
@@ -521,7 +534,7 @@ try {
 
   await check("list_messages: inbox, unread, sent and course filter, with previews", async () => {
     const inbox = parse(await call("list_messages", {}));
-    assert.deepEqual(inbox.conversations.map((v: any) => [v.id, v.unread]), [[70, true], [71, undefined], [72, undefined]]);
+    assert.deepEqual(inbox.conversations.map((v: any) => [v.id, v.unread]), [[70, true], [71, undefined], [72, undefined], [73, undefined]]);
     const room = inbox.conversations[0];
     assert.deepEqual(room.with, ["Dana Ortiz"]);
     assert.equal(room.course, "Software Design");
@@ -534,8 +547,36 @@ try {
     assert.deepEqual(phil.conversations.map((v: any) => v.subject), ["Essay extension"]);
     const sent = parse(await call("list_messages", { scope: "sent", limit: 1 }));
     assert.deepEqual(sent.conversations.map((v: any) => v.id), [70]);
+    assert.equal(mock.state.conversationScopes.at(-1), "sent", "scope=sent must reach /conversations");
+    assert.equal(sent.note, undefined);
     const none = parse(await call("list_messages", { scope: "archived" }));
     assert.match(none.note, /No conversations in archived/);
+  });
+
+  await check("list_messages sent: falls back to conversations the student wrote in when Canvas returns none", async () => {
+    mock.state.sentScopeEmpty = true;
+    try {
+      const sent = parse(await call("list_messages", { scope: "sent" }));
+      assert.deepEqual(sent.conversations.map((v: any) => v.id), [70, 72]);
+      assert.match(sent.note, /written in/);
+      const phil = parse(await call("list_messages", { scope: "sent", course: "PHIL 230" }));
+      assert.deepEqual(phil.conversations.map((v: any) => v.id), [72]);
+    } finally {
+      mock.state.sentScopeEmpty = false;
+    }
+  });
+
+  await check("inbox: a class-wide message gives a count, not the class roster", async () => {
+    const inbox = parse(await call("list_messages", {}));
+    const office = inbox.conversations.find((v: any) => v.id === 73);
+    assert.equal(office.with, "Dana Ortiz + 8 others");
+    const lab = inbox.conversations.find((v: any) => v.id === 71);
+    assert.deepEqual(lab.with, ["Sam Park", "Riley Classmate"]);
+    const thread = parse(await call("get_message", { conversation_id: 73 }));
+    assert.equal(thread.participants, undefined);
+    assert.equal(thread.participant_count, 10);
+    assert.deepEqual(thread.messages.map((m: any) => m.from), ["Dana Ortiz"]);
+    assert.doesNotMatch(JSON.stringify(thread), /Classmate/);
   });
 
   await check("get_message: full thread oldest first with attachments, and never marks it read", async () => {
@@ -552,7 +593,11 @@ try {
 
   await check("get_grades computes group percentages and shows final score + missing work", async () => {
     const out = parse(await call("get_grades", { course: "101" }));
-    assert.equal(out.groups[1].group_score_percent, 100);
+    assert.equal(out.groups[1].group_score_percent, 100); // the omitted practice quiz's 0/2 doesn't count
+    assert.deepEqual(out.groups[1].graded.map((a: any) => [a.name, a.excluded_from_grade]), [["Reflection", undefined], ["Practice quiz", true]]);
+    // The missing writeup has no score key at all; it isn't a graded zero (issue #13).
+    assert.equal(out.groups[0].group_score_percent, 89);
+    assert.deepEqual(out.groups[0].graded.map((a: any) => a.name), ["Strategy Pattern Writeup"]);
     assert.equal(out.groups[0].ungraded_count, 2);
     assert.equal(out.current_score, 93.4);
     assert.equal(out.final_score, 57.8);
@@ -560,6 +605,15 @@ try {
     assert.equal(out.missing_count, 1);
     assert.deepEqual(out.groups[0].missing.map((a: any) => a.name), ["Observer Pattern Writeup"]);
     assert.equal(out.groups[1].missing, undefined);
+  });
+
+  await check("get_grades applies drop rules like Canvas and shows them", async () => {
+    const out = parse(await call("get_grades", { course: "PHIL 230" }));
+    const quizzes = out.groups[0];
+    assert.deepEqual(quizzes.drops, { lowest: 1 });
+    assert.deepEqual(quizzes.dropped_now, ["Quiz 2"]);
+    assert.equal(quizzes.group_score_percent, 73.3); // 22/30 once Quiz 2 is dropped, not 27/50
+    assert.equal(quizzes.graded.find((a: any) => a.name === "Quiz 2").dropped, true);
   });
 
   await check("grade_whatif matches Canvas in a weighted course and finds what's needed for a target", async () => {
@@ -617,6 +671,20 @@ try {
     const out = parse(await call("get_syllabus", { course: "philosophy" }));
     assert.match(out.syllabus, /40%/);
     assert.equal(out.source, "syllabus page");
+    assert.doesNotMatch(out.syllabus, /truncated|Final exam/);
+    assert.match(out.note, /from_char 15000/);
+    const rest = parse(await call("get_syllabus", { course: "philosophy", from_char: 15000 }));
+    assert.match(rest.syllabus, /Final exam: December 12/);
+    assert.equal(rest.note, undefined);
+  });
+
+  await check("a syllabus page of only file links points at the syllabus file by file_id", async () => {
+    const out = parse(await call("get_syllabus", { course: "404" }));
+    assert.equal(out.source, "syllabus page (links only)");
+    assert.deepEqual(out.linked_files.map((f: any) => [f.name, f.file_id]), [["Notes template.docx", 702], ["HIST105_Syllabus.pdf", 701]]);
+    assert.match(out.note, /file_id 701/);
+    const plain = parse(await call("get_syllabus", { course: "CS 240" }));
+    assert.equal(plain.linked_files, undefined);
   });
 
   await check("empty syllabus page falls back to a module page, linking the PDF; hidden tabs are skipped", async () => {
