@@ -1,6 +1,6 @@
 # CLAUDE.md: canvas-mcp
 
-A personal Canvas LMS MCP connector for the owner, a student who is comfortable with TypeScript. README.md has the user-facing setup and tool list; this file covers state, decisions and gotchas.
+A personal Canvas LMS MCP connector for the owner, a student who is comfortable with TypeScript. README.md has the user-facing setup and tool list. This file covers current state and gotchas.
 
 Repo: `christhisway/canvas-mcp` on GitHub. Its sibling is the owner's Microsoft To Do connector.
 
@@ -13,23 +13,14 @@ Code is written on one Mac and runs on another: an older Mac, used as a home ser
 - `.env` exists only on the server and is never committed.
 - Steps that need the server, a browser, the Azure portal or a phone are the owner's to do. Tell them exactly what to run or click.
 
-## Decisions (don't relitigate unless the owner raises them)
+## Decisions: see `docs/architecture/`
 
-- **Node on the home server, not Cloudflare Workers** (decided 2026-11-19). The To Do connector is on Workers. Canvas stays on Node for two reasons:
-  - File submissions need a real folder (`SUBMISSIONS_DIR`, possibly in iCloud Drive).
-  - The approval store wants one long-lived process. On Workers it would need a Durable Object plus R2, and would run into the 10 ms CPU, ~50-subrequest and 128 MB limits.
-- **Auth follows the To Do connector's model:** a consent page, then Microsoft sign-in, then the `ALLOWED_EMAILS` allowlist (fails closed), with consent remembered for 30 days. It is reimplemented on the MCP SDK's `mcpAuthRouter`, because `@cloudflare/workers-oauth-provider` only runs on Workers.
-  - It uses the same Azure app registration, with its own client secret and its own redirect URI.
-  - Microsoft is identity only (`User.Read`); no Microsoft tokens are stored.
-  - The old `/mcp/<secret>` URL auth is gone.
-- **Tailscale Funnel, not Cloudflare Tunnel** (decided 2026-11-19). The owner has no domain. Funnel gives `https://<machine>.<tailnet>.ts.net` with HTTPS ending on the Mac. The owner was told the cons:
-  - The hostname is fixed.
-  - Nothing filters traffic before it reaches the Mac.
-  - Extra connectors on this Mac would need ports 8443 or 10000 (or a reverse proxy), since each OAuth server needs the root of its hostname.
+Important decisions are recorded as ADRs in [docs/architecture/](docs/architecture/README.md). Read that index first.
 
-  Switching later means changing `PUBLIC_URL`, the Azure redirect URI and the connector.
-- **Canvas auth is a personal access token.** Developer-key OAuth needs admin approval at the school, so it's out of scope.
-- **Every submission needs an out-of-band code** (see below).
+- **Search the folder** (for example `grep -ril <topic> docs/architecture`) before changing anything that touches hosting, auth, the tunnel, Canvas access, or the submission approval flow.
+- **Don't relitigate an accepted ADR** unless the owner raises it.
+- **Record a new decision as a new ADR** using the format in ADR 1, add it to the index, and supersede rather than rewrite old ones.
+- **Don't restate decisions in this file.**
 
 ## Layout
 
@@ -53,21 +44,12 @@ src/
 deploy/ctl.sh        install/update/restart/status/logs/revoke/funnel on the server (launchd agent local.canvas-mcp)
 test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + ntfy + CIMD doc); 27 checks
 test/oauth-client.ts plays Claude + the browser through the OAuth flow
+docs/architecture/   ADRs (decisions); index in README.md
 ```
 
-## Submission approval design (keep this intact)
+## Submission approval design
 
-1. `prepare_submission` validates the assignment: accepted types, allowed extensions, attempts left, and lock state. It warns on late submissions and resubmissions. It stores the **exact payload server-side**, reading and sha256-hashing files at this point, and sends a 6-digit code to the owner's phone via ntfy.
-2. The code **never appears in any tool result**. The model has to ask the owner to type it.
-3. `confirm_submission(pending_id, code)` submits only what was staged.
-   - Codes are single-use and expire after 15 minutes.
-   - Three wrong codes cancel the submission.
-   - At most 5 submissions can be pending at once.
-4. Files can only come from `SUBMISSIONS_DIR`. The path is realpath-checked, can't contain path separators, and the file must be 100 MB or less.
-
-Pending submissions live in memory, so a restart clears them. That's intentional.
-
-Any new write tool must go through the same flow.
+Keep it intact: see [ADR 5](docs/architecture/0005-out-of-band-submission-approval.md). Any new write tool goes through the same flow.
 
 ## Auth gotchas
 

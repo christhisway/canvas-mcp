@@ -34,6 +34,8 @@ Claude ──▶ https://<machine>.<tailnet>.ts.net/mcp (Bearer token, via Tails
 - **Clients.** claude.ai identifies itself with a Client ID Metadata Document, which the server accepts only from hosts in `CIMD_ALLOWED_HOSTS` (default `claude.ai`). Other clients, such as the MCP Inspector, use dynamic client registration.
 - **Tokens.** Access tokens last 1 hour. Refresh tokens last 30 days, rotate on every use, and are extended each time they're used. Only SHA-256 hashes are stored, in `DATA_DIR/oauth.json` (mode 0600). `deploy/ctl.sh revoke` signs everything out.
 
+Why it's built this way (Node on a home server, Microsoft sign-in, Funnel, approval codes) is recorded in [docs/architecture/](docs/architecture/README.md).
+
 ### Submission approval
 
 1. You ask Claude to submit something. It calls `prepare_submission`, which checks the assignment: accepted types, file extensions, attempts left, and lock state. The tool then stores the exact payload on the server and pushes a notification to your phone via [ntfy](https://ntfy.sh) with a summary and a 6-digit code.
