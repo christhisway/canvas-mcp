@@ -124,6 +124,13 @@ Log out of the admin account and log in as `connectors`. Do every step from here
 - [ ] **Screen lock:**
   - System Settings → Lock Screen: **Turn display off when inactive** after 1–2 minutes, and **Require password** immediately.
   - Don't sign in to an Apple ID on this account.
+- [ ] **Put Homebrew's tools on this account's PATH.** Step 3's `eval` lines only went into the admin account's shell profile, so here `tailscale` and `node` would otherwise be "not found":
+  ```bash
+  echo 'export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"' >> ~/.zprofile
+  source ~/.zprofile
+  tailscale version && node -v
+  ```
+  - If either command still isn't found, it isn't installed. Go back to step 3 on the admin account.
 - [ ] **Create a read-only deploy key for the repo:**
   ```bash
   ssh-keygen -t ed25519 -f ~/.ssh/canvas-mcp-deploy -N "" -C "canvas-mcp deploy (home-server)"

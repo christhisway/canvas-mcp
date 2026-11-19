@@ -20,7 +20,14 @@ DOMAIN="gui/$(id -u)"
 
 cd "$ROOT"
 
-die() { echo "error: $*" >&2; exit 1; }
+# Homebrew's tools are installed from the admin account, whose shell profile puts them on PATH.
+# The service user's shell may not, so look there too.
+for d in /opt/homebrew/bin /usr/local/bin; do
+  [[ -d $d && ":$PATH:" != *":$d:"* ]] && PATH="$PATH:$d"
+done
+export PATH
+
+die(){ echo "error: $*" >&2; exit 1; }
 
 env_value() { # env_value NAME [default] — reads .env without sourcing it
   local v
@@ -84,7 +91,7 @@ build() {
 ts_bin() {
   command -v tailscale 2>/dev/null \
     || { [[ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]] && echo /Applications/Tailscale.app/Contents/MacOS/Tailscale; } \
-    || die "tailscale not found. See README → Deploy → 3."
+    || die "tailscale not found. Install it from the admin account: brew install tailscale (docs/deploy-checklist.md, step 3)."
 }
 
 funnel_url() { # https://<machine>.<tailnet>.ts.net, from this machine's Tailscale status

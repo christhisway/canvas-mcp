@@ -61,7 +61,7 @@ The server runs as a dedicated **standard** macOS user (`connectors`) that logs 
    - add the policy that limits the server to inbound SSH and allows Funnel
    - tag the machine `tag:server` (tagged machines don't have key expiry)
 3. **`connectors` user:**
-   - set a quick screen lock
+   - set a quick screen lock, and put `/opt/homebrew/bin` on PATH (Homebrew's setup only did that for the admin account)
    - create a **read-only deploy key**, then clone to `~/connectors/canvas-mcp`
    - run `deploy/ctl.sh funnel`, which prints `PUBLIC_URL`, the Azure redirect URI and the connector URL. claude.ai calls the connector from Anthropic's servers, so it needs this public HTTPS address. HTTPS ends on the Mac; Tailscale only relays the traffic.
 4. **Gather the secrets:**
