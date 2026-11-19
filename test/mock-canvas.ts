@@ -1,9 +1,17 @@
-// A tiny fake Canvas used by the smoke test. Shapes follow the real API closely
+// A tiny fake Canvas (plus fake Microsoft sign-in and ntfy) used by the smoke test. Shapes follow the real API closely
 // enough to exercise pagination, the file-upload dance, and submissions.
 import express from "express";
 import type { AddressInfo } from "node:net";
 
 export const TOKEN = "test-token";
+export const MS_CLIENT_ID = "ms-client-id";
+export const MS_CLIENT_SECRET = "ms-client-secret";
+export const ALLOWED_EMAIL = "owner@example.com";
+
+const msAccounts: Record<string, { id: string; displayName: string; mail: string | null; userPrincipalName: string }> = {
+  owner: { id: "u1", displayName: "Owner", mail: null, userPrincipalName: "Owner@Example.com" },
+  stranger: { id: "u2", displayName: "Stranger", mail: "stranger@example.com", userPrincipalName: "stranger@example.com" },
+};
 
 export async function startMockCanvas() {
   const app = express();
@@ -14,6 +22,7 @@ export async function startMockCanvas() {
     uploads: [] as Array<{ fields: string[]; bytes: number }>,
     ntfy: [] as Array<{ title?: string; body: string }>,
     unauthorized: 0,
+    msTokenRequests: [] as Array<Record<string, string>>,
   };
 
   const now = Date.now();
@@ -109,6 +118,37 @@ export async function startMockCanvas() {
     state.submissions.push({ courseId: req.params.cid, assignmentId: req.params.aid, form: req.body });
     mySubs[req.params.aid] = { workflow_state: "submitted", submitted_at: new Date().toISOString(), score: null, grade: null, attempt: 1, late: req.params.aid === "12" };
     res.json(mySubs[req.params.aid]);
+  });
+
+  // Stand-in for Microsoft sign-in. The test drives the browser part itself (it reads the authorize
+  // redirect and calls /callback directly), so only the token endpoint and Graph /me are needed.
+  // The Microsoft code picks the account: "ms-code-<who>".
+  app.post("/ms/:tenant/oauth2/v2.0/token", express.urlencoded({ extended: false }), (req, res) => {
+    const b = req.body as Record<string, string>;
+    state.msTokenRequests.push(b);
+    if (b.client_id !== MS_CLIENT_ID || b.client_secret !== MS_CLIENT_SECRET || !b.code_verifier) {
+      return res.status(400).json({ error: "invalid_client" });
+    }
+    const who = b.code?.replace(/^ms-code-/, "");
+    if (!who || !(who in msAccounts)) return res.status(400).json({ error: "invalid_grant" });
+    res.json({ access_token: `ms-at-${who}`, token_type: "Bearer", expires_in: 3600 });
+  });
+  app.get("/graph/v1.0/me", (req, res) => {
+    const who = req.headers.authorization?.replace(/^Bearer ms-at-/, "") ?? "";
+    const p = msAccounts[who];
+    if (!p) return res.status(401).json({ error: { code: "InvalidAuthenticationToken" } });
+    res.json(p);
+  });
+
+  // A Client ID Metadata Document, like the one claude.ai serves.
+  app.get("/cimd/client.json", (req, res) => {
+    res.json({
+      client_id: `http://${req.headers.host}/cimd/client.json`,
+      client_name: "Mock Claude",
+      redirect_uris: ["https://claude.example/api/mcp/auth_callback"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+    });
   });
 
   // Stand-in for ntfy.sh

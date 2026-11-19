@@ -1,4 +1,4 @@
-// End-to-end check: real HTTP server process ↔ mock Canvas ↔ MCP client.
+// End-to-end check: real HTTP server process ↔ mock Canvas + mock Microsoft ↔ OAuth + MCP client.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -6,13 +6,16 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { startMockCanvas, TOKEN } from "./mock-canvas.js";
+import { ALLOWED_EMAIL, MS_CLIENT_ID, MS_CLIENT_SECRET, startMockCanvas, TOKEN } from "./mock-canvas.js";
+import { Jar, register, signIn, token } from "./oauth-client.js";
 
-const SECRET = "s".repeat(32);
 const PORT = 18787;
+const BASE = `http://127.0.0.1:${PORT}`;
+const REDIRECT = "https://claude.example/api/mcp/auth_callback";
 
 const mock = await startMockCanvas();
 const subsDir = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-subs-"));
+const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-data-"));
 await fs.writeFile(path.join(subsDir, "factory.pdf"), Buffer.from("%PDF-1.4 fake pdf body"));
 await fs.writeFile(path.join(subsDir, "notes.txt"), "not allowed for a pdf-only assignment");
 
@@ -21,8 +24,16 @@ const proc = spawn(process.execPath, ["--import", "tsx", "src/http.ts"], {
     ...process.env,
     CANVAS_BASE_URL: mock.url,
     CANVAS_TOKEN: TOKEN,
-    MCP_PATH_SECRET: SECRET,
+    PUBLIC_URL: BASE,
     PORT: String(PORT),
+    MS_CLIENT_ID,
+    MS_CLIENT_SECRET,
+    MS_AUTHORITY: `${mock.url}/ms`,
+    MS_GRAPH_URL: `${mock.url}/graph`,
+    ALLOWED_EMAILS: ` ${ALLOWED_EMAIL.toUpperCase()} , other@example.com`,
+    COOKIE_SECRET: "c".repeat(64),
+    CIMD_ALLOWED_HOSTS: new URL(mock.url).host,
+    DATA_DIR: dataDir,
     NTFY_URL: `${mock.url}/ntfy/topic`,
     SUBMISSIONS_DIR: subsDir,
   },
@@ -35,7 +46,7 @@ proc.stderr.on("data", (d) => (serverLog += d));
 async function waitForServer() {
   for (let i = 0; i < 50; i++) {
     try {
-      if ((await fetch(`http://127.0.0.1:${PORT}/healthz`)).ok) return;
+      if ((await fetch(`${BASE}/healthz`)).ok) return;
     } catch {}
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -59,16 +70,242 @@ async function check(name: string, fn: () => Promise<void>) {
   }
 }
 
-try {
-  await waitForServer();
-
-  await check("wrong path secret is a 404", async () => {
-    const r = await fetch(`http://127.0.0.1:${PORT}/mcp/${"x".repeat(32)}`, { method: "POST" });
-    assert.equal(r.status, 404);
+const mcpPing = (accessToken: string) =>
+  fetch(`${BASE}/mcp`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
   });
 
+try {
+  await waitForServer();
+  console.log("auth");
+
+  await check("/mcp without a token is a 401 pointing at resource metadata", async () => {
+    const r = await fetch(`${BASE}/mcp`, { method: "POST" });
+    assert.equal(r.status, 401);
+    assert.match(r.headers.get("www-authenticate") ?? "", /resource_metadata="http:\/\/127\.0\.0\.1:\d+\/\.well-known\/oauth-protected-resource\/mcp"/);
+    const bogus = await mcpPing("cmcp_at_nope");
+    assert.equal(bogus.status, 401);
+  });
+
+  await check("metadata: protected resource + authorization server (with CIMD flag)", async () => {
+    const prm = await (await fetch(`${BASE}/.well-known/oauth-protected-resource/mcp`)).json();
+    assert.equal(prm.resource, `${BASE}/mcp`);
+    assert.deepEqual(prm.authorization_servers, [`${BASE}/`]);
+    const as = await (await fetch(`${BASE}/.well-known/oauth-authorization-server`)).json();
+    assert.equal(as.client_id_metadata_document_supported, true);
+    assert.equal(as.registration_endpoint, `${BASE}/register`);
+    assert.deepEqual(as.code_challenge_methods_supported, ["S256"]);
+  });
+
+  let accessToken = "";
+  let refreshToken = "";
+  let dcr: { client_id: string; client_secret?: string } = { client_id: "" };
+
+  await check("DCR client: consent → Microsoft → code → tokens", async () => {
+    dcr = await register(BASE, { client_name: "Smoke Client", redirect_uris: [REDIRECT] });
+    assert.ok(dcr.client_secret, "confidential client gets a secret");
+    const s = await signIn(BASE, { clientId: dcr.client_id, redirectUri: REDIRECT, msCode: "ms-code-owner" });
+    assert.equal(s.sawConsent, true);
+    assert.equal(s.redirect.searchParams.get("state"), "client-state");
+    const code = s.redirect.searchParams.get("code")!;
+    assert.ok(code);
+    const ms = mock.state.msTokenRequests.at(-1)!;
+    assert.equal(ms.redirect_uri, `${BASE}/callback`);
+    assert.equal(ms.scope, "User.Read");
+
+    const t = await token(BASE, {
+      grant_type: "authorization_code", code, code_verifier: s.verifier, client_id: dcr.client_id,
+      client_secret: dcr.client_secret!, redirect_uri: REDIRECT, resource: `${BASE}/mcp`,
+    });
+    assert.equal(t.status, 200, JSON.stringify(t.body));
+    assert.match(t.body.access_token, /^cmcp_at_/);
+    assert.equal(t.body.expires_in, 3600);
+    accessToken = t.body.access_token;
+    refreshToken = t.body.refresh_token;
+    assert.equal((await mcpPing(accessToken)).status, 200);
+
+    // Reusing the code fails and revokes what it issued.
+    const again = await token(BASE, {
+      grant_type: "authorization_code", code, code_verifier: s.verifier, client_id: dcr.client_id, client_secret: dcr.client_secret!,
+    });
+    assert.equal(again.body.error, "invalid_grant");
+    assert.equal((await mcpPing(accessToken)).status, 401, "reused code must revoke its tokens");
+  });
+
+  await check("wrong PKCE verifier and missing client secret are refused", async () => {
+    const s = await signIn(BASE, { clientId: dcr.client_id, redirectUri: REDIRECT, msCode: "ms-code-owner" });
+    const code = s.redirect.searchParams.get("code")!;
+    const noSecret = await token(BASE, { grant_type: "authorization_code", code, code_verifier: s.verifier, client_id: dcr.client_id });
+    assert.equal(noSecret.body.error, "invalid_client");
+    const badVerifier = await token(BASE, {
+      grant_type: "authorization_code", code, code_verifier: "x".repeat(43), client_id: dcr.client_id, client_secret: dcr.client_secret!,
+    });
+    assert.equal(badVerifier.body.error, "invalid_grant");
+    const ok = await token(BASE, {
+      grant_type: "authorization_code", code, code_verifier: s.verifier, client_id: dcr.client_id, client_secret: dcr.client_secret!,
+    });
+    assert.equal(ok.status, 200);
+    accessToken = ok.body.access_token;
+    refreshToken = ok.body.refresh_token;
+  });
+
+  await check("refresh rotates tokens; the previous refresh token survives one retry", async () => {
+    const secret = dcr.client_secret!;
+    const r1 = await token(BASE, { grant_type: "refresh_token", refresh_token: refreshToken, client_id: dcr.client_id, client_secret: secret });
+    assert.equal(r1.status, 200, JSON.stringify(r1.body));
+    assert.notEqual(r1.body.refresh_token, refreshToken);
+    assert.equal((await mcpPing(accessToken)).status, 401, "old access token is retired");
+    assert.equal((await mcpPing(r1.body.access_token)).status, 200);
+
+    // Client lost r1's response and retries with the old refresh token: still accepted.
+    const retry = await token(BASE, { grant_type: "refresh_token", refresh_token: refreshToken, client_id: dcr.client_id, client_secret: secret });
+    assert.equal(retry.status, 200);
+    // ...which makes r1's never-used refresh token invalid.
+    const stale = await token(BASE, { grant_type: "refresh_token", refresh_token: r1.body.refresh_token, client_id: dcr.client_id, client_secret: secret });
+    assert.equal(stale.body.error, "invalid_grant");
+
+    // Another client can't use this grant's refresh token.
+    const other = await register(BASE, { client_name: "Other", redirect_uris: [REDIRECT] });
+    const theft = await token(BASE, { grant_type: "refresh_token", refresh_token: retry.body.refresh_token, client_id: other.client_id, client_secret: other.client_secret! });
+    assert.equal(theft.body.error, "invalid_grant");
+
+    accessToken = retry.body.access_token;
+    refreshToken = retry.body.refresh_token;
+  });
+
+  await check("a Microsoft account not on the allowlist is turned away", async () => {
+    const s = await signIn(BASE, { clientId: dcr.client_id, redirectUri: REDIRECT, msCode: "ms-code-stranger" });
+    assert.equal(s.redirect.searchParams.get("error"), "access_denied");
+    assert.equal(s.redirect.searchParams.get("code"), null);
+    assert.match(serverLog, /Rejected sign-in from stranger@example\.com/);
+  });
+
+  await check("consent POST without the browser cookie, and a replayed callback, are rejected", async () => {
+    const jar = new Jar();
+    const auth = new URL(`${BASE}/authorize`);
+    auth.search = new URLSearchParams({
+      response_type: "code", client_id: dcr.client_id, redirect_uri: REDIRECT,
+      code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", code_challenge_method: "S256",
+    }).toString();
+    const page = await fetch(auth, { redirect: "manual" });
+    jar.take(page);
+    const html = await page.text();
+    assert.match(page.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+    assert.match(html, /Smoke Client/);
+    const handle = html.match(/name="handle" value="([^"]+)"/)![1]!;
+    const forged = await fetch(`${BASE}/consent`, {
+      method: "POST", redirect: "manual",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ handle, action: "approve" }),
+    });
+    assert.equal(forged.status, 400);
+
+    // A completed callback can't be replayed.
+    const approved = await fetch(`${BASE}/consent`, {
+      method: "POST", redirect: "manual",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: jar.header() },
+      body: new URLSearchParams({ handle, action: "approve" }),
+    });
+    jar.take(approved);
+    const state = new URL(approved.headers.get("location")!).searchParams.get("state")!;
+    const cb = `${BASE}/callback?code=ms-code-owner&state=${encodeURIComponent(state)}`;
+    const first = await fetch(cb, { redirect: "manual", headers: { Cookie: jar.header() } });
+    assert.equal(first.status, 302);
+    const replay = await fetch(cb, { redirect: "manual", headers: { Cookie: jar.header() } });
+    assert.equal(replay.status, 400);
+  });
+
+  await check("cancel on the consent page returns access_denied to the client", async () => {
+    const jar = new Jar();
+    const auth = new URL(`${BASE}/authorize`);
+    auth.search = new URLSearchParams({
+      response_type: "code", client_id: dcr.client_id, redirect_uri: REDIRECT, state: "s1",
+      code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", code_challenge_method: "S256",
+    }).toString();
+    const page = await fetch(auth, { redirect: "manual" });
+    jar.take(page);
+    const handle = (await page.text()).match(/name="handle" value="([^"]+)"/)![1]!;
+    const deny = await fetch(`${BASE}/consent`, {
+      method: "POST", redirect: "manual",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: jar.header() },
+      body: new URLSearchParams({ handle, action: "deny" }),
+    });
+    const loc = new URL(deny.headers.get("location")!);
+    assert.equal(loc.origin + loc.pathname, REDIRECT);
+    assert.equal(loc.searchParams.get("error"), "access_denied");
+    assert.equal(loc.searchParams.get("state"), "s1");
+  });
+
+  await check("CIMD client (no registration), with remembered consent on the second sign-in", async () => {
+    const clientId = `${mock.url}/cimd/client.json`;
+    const jar = new Jar();
+    const s1 = await signIn(BASE, { clientId, redirectUri: REDIRECT, msCode: "ms-code-owner", jar });
+    assert.equal(s1.sawConsent, true);
+    const t = await token(BASE, {
+      grant_type: "authorization_code", code: s1.redirect.searchParams.get("code")!, code_verifier: s1.verifier, client_id: clientId,
+    });
+    assert.equal(t.status, 200, JSON.stringify(t.body));
+    assert.equal((await mcpPing(t.body.access_token)).status, 200);
+
+    const s2 = await signIn(BASE, { clientId, redirectUri: REDIRECT, msCode: "ms-code-owner", jar });
+    assert.equal(s2.sawConsent, false, "consent should be remembered for the same client + redirect");
+
+    // A CIMD URL on a host that isn't allowlisted is an unknown client.
+    const r = await fetch(`${BASE}/authorize?response_type=code&client_id=${encodeURIComponent("https://evil.example/client.json")}&code_challenge=x&code_challenge_method=S256`, { redirect: "manual" });
+    assert.equal(r.status, 400);
+  });
+
+  await check("resource for a different server is refused", async () => {
+    const auth = new URL(`${BASE}/authorize`);
+    auth.search = new URLSearchParams({
+      response_type: "code", client_id: dcr.client_id, redirect_uri: REDIRECT, state: "s2",
+      code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", code_challenge_method: "S256",
+      resource: "https://elsewhere.example/mcp",
+    }).toString();
+    const r = await fetch(auth, { redirect: "manual" });
+    assert.equal(r.status, 302, "no consent page for a foreign resource");
+    const loc = new URL(r.headers.get("location")!);
+    assert.equal(loc.searchParams.get("error"), "invalid_target");
+    assert.equal(loc.searchParams.get("state"), "s2");
+  });
+
+  await check("revocation kills the token", async () => {
+    const s = await signIn(BASE, { clientId: dcr.client_id, redirectUri: REDIRECT, msCode: "ms-code-owner" });
+    const t = await token(BASE, {
+      grant_type: "authorization_code", code: s.redirect.searchParams.get("code")!, code_verifier: s.verifier,
+      client_id: dcr.client_id, client_secret: dcr.client_secret!,
+    });
+    const r = await fetch(`${BASE}/revoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: t.body.access_token, client_id: dcr.client_id, client_secret: dcr.client_secret! }),
+    });
+    assert.equal(r.status, 200);
+    assert.equal((await mcpPing(t.body.access_token)).status, 401);
+  });
+
+  await check("grants persist to a 0600 file holding only token hashes", async () => {
+    const file = path.join(dataDir, "oauth.json");
+    const st = await fs.stat(file);
+    assert.equal(st.mode & 0o777, 0o600);
+    const text = await fs.readFile(file, "utf8");
+    assert.ok(!text.includes(accessToken) && !text.includes(refreshToken), "raw tokens must not be stored");
+    assert.match(text, new RegExp(ALLOWED_EMAIL));
+  });
+
+  console.log("tools");
   const client = new Client({ name: "smoke", version: "0" });
-  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${PORT}/mcp/${SECRET}`)));
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${accessToken}` } },
+    }),
+  );
   const call = async (name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: args });
 
   await check("lists all tools with annotations", async () => {
@@ -197,5 +434,6 @@ try {
   proc.kill();
   mock.close();
   await fs.rm(subsDir, { recursive: true, force: true });
+  await fs.rm(dataDir, { recursive: true, force: true });
   console.log(`\n${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);
 }

@@ -1,14 +1,15 @@
 {
   "name": "canvas-mcp",
   "version": "0.1.0",
-  "description": "Personal Canvas LMS MCP connector (read + approval-gated submissions)",
+  "description": "Personal Canvas LMS MCP connector (read + approval-gated submissions), OAuth via Microsoft sign-in",
   "main": "dist/http.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/http.js",
     "dev": "tsx watch src/http.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx test/smoke.ts"
+    "test": "tsx test/smoke.ts",
+    "revoke-grants": "node dist/revoke-grants.js"
   },
   "license": "MIT",
   "dependencies": {
@@ -26,6 +27,6 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.12"
   }
 }
