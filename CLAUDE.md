@@ -21,7 +21,7 @@ Code is written on one Mac and runs on another: an older Mac, used as a home ser
 
 Important decisions are recorded as ADRs in [docs/architecture/](docs/architecture/README.md). Read that index first.
 
-- **Search the folder** (for example `grep -ril <topic> docs/architecture`) before changing anything that touches hosting, auth, the tunnel, Canvas access, or the submission approval flow.
+- **Search the folder** (for example `grep -ril <topic> docs/architecture`) before changing anything that touches hosting, auth, the tunnel, Canvas access, or adding any write to Canvas.
 - **Don't relitigate an accepted ADR** unless the owner raises it.
 - **Record a new decision as a new ADR** using the format in ADR 1, add it to the index, and supersede rather than rewrite old ones.
 - **Don't restate decisions in this file.**
@@ -37,24 +37,22 @@ src/
   auth/microsoft.ts  Microsoft authorize URL, code exchange + /me, allowlist, PKCE
   auth/cimd.ts       Client ID Metadata Document fetch, allowlisted hosts only
   auth/pages.ts      consent/error HTML
-  server.ts          buildServer(), shared long-lived state (Canvas client, course cache, approvals)
-  canvas.ts          Canvas REST client: Link-header pagination, rate-limit retry, 3-step file upload
+  server.ts          buildServer(), shared long-lived state (Canvas client, course cache)
+  canvas.ts          GET-only Canvas REST client: Link-header pagination, rate-limit retry
   courses.ts         active-course cache + resolve("CS 240" | "philosophy" | id)
-  approvals.ts       pending-submission store, one-time codes, ntfy/console notifiers
   format.ts          html→text, time-zone dates, compact()
   tools/read.ts      list_courses, get_upcoming, list_assignments, get_assignment, get_grades, list_announcements, get_syllabus
-  tools/submit.ts    list_submission_files, prepare_submission, confirm_submission, cancel_submission
   revoke-grants.ts   wipes all grants (used by deploy/ctl.sh revoke)
 deploy/ctl.sh        install/update/restart/status/logs/revoke/funnel on the server (launchd agent local.canvas-mcp)
-test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + ntfy + CIMD doc); 27 checks
+test/smoke.ts        spawns the real server against test/mock-canvas.ts (Canvas + Microsoft + CIMD doc); 22 checks
 test/oauth-client.ts plays Claude + the browser through the OAuth flow
 docs/architecture/   ADRs (decisions); index in README.md
 docs/deploy-checklist.md  step-by-step server setup; keep it in sync with deploy/ctl.sh
 ```
 
-## Submission approval design
+## Read-only
 
-Keep it intact: see [ADR 5](docs/architecture/0005-out-of-band-submission-approval.md). Any new write tool goes through the same flow.
+The connector never writes to Canvas: see [ADR 9](docs/architecture/0009-read-only-no-submissions.md). The submission tools were removed; they're in git history. A write tool needs a new ADR first.
 
 ## Auth gotchas
 
@@ -78,7 +76,7 @@ Keep it intact: see [ADR 5](docs/architecture/0005-out-of-band-submission-approv
 
 ## Verified vs. not
 
-Verified (2026-11-19, mocks only; `npm test`, 27/27 passing; `tsc` clean for `src` and `test`):
+Verified (2026-11-19, mocks only; `npm test`, 22/22 passing; `tsc` clean for `src` and `test`):
 - Metadata and the 401 challenge.
 - DCR and CIMD sign-in through the consent page → Microsoft → callback → token.
 - Wrong PKCE verifier, missing client secret, and code reuse (which revokes the grant).
@@ -86,7 +84,7 @@ Verified (2026-11-19, mocks only; `npm test`, 27/27 passing; `tsc` clean for `sr
 - An account not on the allowlist is turned away.
 - A forged consent POST and a replayed callback are rejected. Cancel works, and consent is remembered.
 - Foreign resource, revocation, and the 0600 store holding only hashes.
-- All 11 tools, including the full approval flow against mock Canvas.
+- All 7 read tools against mock Canvas, and that every Canvas request is a GET.
 
 Not verified (needs the server and real accounts):
 - Real Microsoft sign-in with the shared Azure app, and that the owner's `/me` email matches `ALLOWED_EMAILS`.
@@ -96,27 +94,25 @@ Not verified (needs the server and real accounts):
   - `get_upcoming` planner shapes for quizzes and discussions
   - assignment-group edge cases
   - course entries with null names
-- `canvas.uploadSubmissionFile` against the school's storage. It might answer 201 JSON or a 3xx; only the 3xx path is tested.
-- Tailscale Funnel on the server, launchd, and iCloud Drive access from a LaunchAgent (it may need Full Disk Access for `node`).
+- Tailscale Funnel on the server, and launchd.
   - `deploy/ctl.sh funnel` was only run here against a stand-in `tailscale` script; real Funnel output formats weren't checked.
   - Does Funnel forward the original Host header? Either way works, because loopback is allowed.
 - `deploy/ctl.sh install/update` on the server. On the dev machine only `plist` was run, plus the `.env` placeholder check.
 
 ## Next steps (in order)
 
-1. **On the server**, the owner follows [docs/deploy-checklist.md](docs/deploy-checklist.md) in order:
+1. **On the server**, the owner follows [docs/deploy-checklist.md](docs/deploy-checklist.md) in order. As of 2026-11-19 the owner is at step 6 (Funnel):
    - admin account: Mac prep, the `devserver` user, tools, Tailscale (machine name, policy, `tag:server`)
    - as `devserver`: a deploy key, then clone, then `deploy/ctl.sh funnel` (this sets `PUBLIC_URL`)
-   - write `.env`, add the Azure redirect URI and a new secret, set up ntfy
+   - write `.env`, add the Azure redirect URI and a new secret
    - run `deploy/ctl.sh install`
 2. **Check** that `<PUBLIC_URL>/healthz` loads from outside the home network.
 3. **Connect in claude.ai**. Watch `deploy/ctl.sh logs` during the OAuth flow, then call each read tool.
-4. **Do a real submission** on a low-stakes or sandbox assignment, and confirm the upload path.
-5. **Confirm refresh works** more than an hour after connecting (look for `POST /token` in the log with no reconnect prompt).
+4. **Confirm refresh works** more than an hour after connecting (look for `POST /token` in the log with no reconnect prompt).
 
 ## Possible later additions
 
-Modules, files, quiz details, discussions, inbox and planner notes. All read-only unless the owner asks for more writes.
+Modules, files, quiz details, discussions, inbox and planner notes. All read-only ([ADR 9](docs/architecture/0009-read-only-no-submissions.md)).
 
 ## Commands
 

@@ -4,7 +4,7 @@ Step-by-step setup for the home-server Mac. Tick the boxes as you go; GitHub ren
 
 You'll use **two macOS accounts** on that Mac:
 
-- **Your admin account** for system setup (Homebrew, `pmset`, Tailscale, privacy permissions).
+- **Your admin account** for system setup (Homebrew, `pmset`, Tailscale).
 - **A dedicated standard user**, called `devserver` below, that runs the connectors and logs in automatically.
 
 [ADR 8](architecture/0008-dedicated-user-filevault-off.md) explains why: with FileVault off, the disk should hold only secrets you can revoke. Other decisions are in [docs/architecture/](architecture/README.md), and background is in the [README](../README.md).
@@ -15,12 +15,11 @@ You'll need:
 
 - [ ] **Access to the Azure portal** with the account that owns the To Do connector's app registration.
 - [ ] **A Tailscale account** (the free plan is enough).
-- [ ] **The ntfy app on your phone.**
 - [ ] **The Microsoft account you'll sign in with** when you connect Canvas in claude.ai. Its email goes in `ALLOWED_EMAILS`.
   - It doesn't have to be the account you use for To Do.
   - A personal account is safest, because a school account may be blocked from consenting to a third-party app.
 - [ ] **A new, unique password** for the `devserver` user. Automatic login stores it on disk in a recoverable form, so don't reuse it anywhere.
-- [ ] **A low-stakes Canvas assignment** (or a sandbox course) for the submission test, and about an hour and a half.
+- [ ] **About an hour and a quarter.**
 
 ## 1. Admin account: prepare the Mac
 
@@ -203,33 +202,7 @@ Log out of the admin account and log in as `devserver`. Do every step from here 
   - Copy the token now; Canvas won't show it again.
 - [ ] **Set a reminder** for the day before it expires, to create the next one.
 
-## 9. ntfy (approval codes)
-
-- [ ] **Generate a topic name:** `openssl rand -hex 16`. Anyone who knows the topic can read your approval codes.
-- [ ] **Subscribe your phone:** in the ntfy app, tap **+** and subscribe to that topic on ntfy.sh.
-- [ ] **Send a test:** `curl -d "canvas-mcp test" https://ntfy.sh/<topic>`. Your phone should show it within a few seconds.
-
-## 10. Submissions folder
-
-The default is `./submissions` inside the checkout (`~/connectors/canvas-mcp/submissions`). From your laptop, copy files in over Tailscale:
-
-```bash
-scp report.pdf devserver@<machine>:connectors/canvas-mcp/submissions/
-```
-
-- [ ] **Create the folder:** `mkdir -p ~/connectors/canvas-mcp/submissions`
-
-**Optional: add files from your phone.** This route keeps your own Apple ID off the server: a separate Apple ID on the `devserver` user sees only one folder you share with it.
-
-- [ ] **Create a new Apple ID** used only for this. It may ask for a phone number.
-- [ ] **On the `devserver` user, sign in to iCloud with it.**
-  - Turn on only **iCloud Drive**, with Optimize Mac Storage **off**.
-  - Turn off Keychain, Photos and everything else.
-- [ ] **On your phone, share a folder with it.** In the Files app → iCloud Drive, create `Canvas Submissions`, then long-press → **Share**. Only invited people get access, with **Can make changes**. Invite the new Apple ID.
-- [ ] **On the server, accept the invite.** The folder then appears at `~/Library/Mobile Documents/com~apple~CloudDocs/Canvas Submissions`.
-  - Use that full `/Users/devserver/...` path for `SUBMISSIONS_DIR`. `.env` doesn't expand `~/`, and spaces are fine without quotes.
-
-## 11. Fill in `.env`
+## 9. Fill in `.env`
 
 Edit `~/connectors/canvas-mcp/.env`, for example with `nano .env`:
 
@@ -243,13 +216,11 @@ Edit `~/connectors/canvas-mcp/.env`, for example with `nano .env`:
 | `MS_TENANT` | leave as `common` |
 | `ALLOWED_EMAILS` | the email of the Microsoft account from step 0 |
 | `COOKIE_SECRET` | output of `openssl rand -hex 32` |
-| `NTFY_URL` | `https://ntfy.sh/<topic>` from step 9 |
-| `SUBMISSIONS_DIR` | leave `./submissions`, or the full shared-folder path from step 10 |
 | `TIME_ZONE` | leave as `America/New_York` |
 
 - [ ] All keys are filled in. `deploy/ctl.sh install` refuses to run while any placeholder is left.
 
-## 12. Install and start
+## 10. Install and start
 
 - [ ] **Install:**
   ```bash
@@ -263,16 +234,15 @@ Edit `~/connectors/canvas-mcp/.env`, for example with `nano .env`:
 
   A brand-new Funnel hostname can take a few minutes to resolve.
 
-## 13. Connect in claude.ai
+## 11. Connect in claude.ai
 
 - [ ] **Keep the log open on the server:** `deploy/ctl.sh logs` (over SSH works).
 - [ ] **Add the connector.** In claude.ai → Settings → Connectors → **Add custom connector**: name it "Canvas", enter the connector URL from step 6, then click **Connect**.
 - [ ] **Sign in.** Approve the consent page and sign in with the Microsoft account from step 0. You should land back in claude.ai, connected.
 - [ ] **Check the log** shows `Sign-in approved for <your email>`.
   - If it shows `CIMD fetch failed`, set `CIMD_ALLOWED_HOSTS=none` in `.env`, run `deploy/ctl.sh restart`, and connect again.
-- [ ] **Optional:** set the connector's `confirm_submission` permission to **Ask**.
 
-## 14. Try every read tool
+## 12. Try every read tool
 
 In a new chat with the connector enabled, ask:
 
@@ -285,15 +255,7 @@ In a new chat with the connector enabled, ask:
 
 Paste any errors or odd output into a Claude Code session in this repo. These tools have never run against real Canvas.
 
-## 15. Submission test (low stakes)
-
-- [ ] **Add a test file** to the submissions folder, then ask "What files are ready to submit?" (`list_submission_files`).
-  - If it fails with a permission error on the shared iCloud folder, use the admin account to add `/opt/homebrew/bin/node` under System Settings → Privacy & Security → **Full Disk Access**. The real binary is under `/opt/homebrew/Cellar/node/…`; add that too if the first doesn't take. Then run `deploy/ctl.sh restart`.
-- [ ] **Ask Claude to submit it** to the practice assignment. Check the preview, and check that the code arrives on your phone but **doesn't** appear in the chat.
-- [ ] **Type the code.** Claude reports `submitted`, and the submission shows in Canvas.
-  - If the upload fails, keep the log lines; the storage-upload step is the least-tested part.
-
-## 16. Resilience and isolation checks
+## 13. Resilience and isolation checks
 
 - [ ] **Reboot test.** Run `sudo reboot` from the admin account. Once it's back, with no one touching it:
   - it's logged in as `devserver` and the screen locks
@@ -303,7 +265,7 @@ Paste any errors or odd output into a Claude Code session in this repo. These to
 - [ ] **SSH from your laptop** (with Tailscale installed there): `ssh devserver@<machine>`, then `cd ~/connectors/canvas-mcp && deploy/ctl.sh status`.
 - [ ] **Isolation.** From the server, try `ssh <you>@<laptop>` or `curl http://<laptop>:<some open port>`. It should time out, because the server can't reach your other devices.
 
-## 17. Reminders to set
+## 14. Reminders to set
 
 - [ ] **Azure client secret expiry** (step 7). To rotate: create a new secret, update `MS_CLIENT_SECRET`, then `deploy/ctl.sh restart`.
 - [ ] **Canvas token expiry** at the end of the semester (step 8). To rotate: create a new token, update `CANVAS_TOKEN`, then `deploy/ctl.sh restart`.
@@ -330,6 +292,5 @@ Do these from any other device, in this order:
 2. **Canvas** → Account → Settings → Approved Integrations: delete the "Claude connector" token.
 3. **Azure portal** → the app → Certificates & secrets: delete the `canvas-mcp` secret.
 4. **GitHub** → christhisway/canvas-mcp → Settings → Deploy keys: delete the server's key.
-5. **If you set up the shared iCloud folder:** stop sharing it with the server's Apple ID.
 
 Then set up a new machine from the top of this checklist. Connecting again issues new tokens, and anything the old server issued is useless without it.

@@ -43,13 +43,6 @@ export interface Config {
   cimdAllowedHosts: string[];
   /** Where OAuth clients and grants are persisted (oauth.json, mode 0600). */
   dataDir: string;
-  /** ntfy topic URL for approval codes, e.g. https://ntfy.sh/<long-random-topic> */
-  ntfyUrl: string;
-  ntfyToken: string;
-  /** Files in this folder can be submitted by name; nothing outside it is readable */
-  submissionsDir: string;
-  /** Minutes an approval code stays valid */
-  approvalTtlMinutes: number;
 }
 
 export function loadConfig(): Config {
@@ -80,9 +73,5 @@ export function loadConfig(): Config {
     // "none" turns CIMD off (clients then fall back to dynamic registration).
     cimdAllowedHosts: list("CIMD_ALLOWED_HOSTS", "claude.ai").filter((h) => h !== "none"),
     dataDir: path.resolve(optional("DATA_DIR", path.join(process.cwd(), "data"))),
-    ntfyUrl: optional("NTFY_URL"),
-    ntfyToken: optional("NTFY_TOKEN"),
-    submissionsDir: path.resolve(optional("SUBMISSIONS_DIR", path.join(process.cwd(), "submissions"))),
-    approvalTtlMinutes: Number(optional("APPROVAL_TTL_MINUTES", "15")),
   };
 }

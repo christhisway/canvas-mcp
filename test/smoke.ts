@@ -14,10 +14,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const REDIRECT = "https://claude.example/api/mcp/auth_callback";
 
 const mock = await startMockCanvas();
-const subsDir = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-subs-"));
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-data-"));
-await fs.writeFile(path.join(subsDir, "factory.pdf"), Buffer.from("%PDF-1.4 fake pdf body"));
-await fs.writeFile(path.join(subsDir, "notes.txt"), "not allowed for a pdf-only assignment");
 
 const proc = spawn(process.execPath, ["--import", "tsx", "src/http.ts"], {
   env: {
@@ -34,8 +31,6 @@ const proc = spawn(process.execPath, ["--import", "tsx", "src/http.ts"], {
     COOKIE_SECRET: "c".repeat(64),
     CIMD_ALLOWED_HOSTS: new URL(mock.url).host,
     DATA_DIR: dataDir,
-    NTFY_URL: `${mock.url}/ntfy/topic`,
-    SUBMISSIONS_DIR: subsDir,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -308,15 +303,14 @@ try {
   );
   const call = async (name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: args });
 
-  await check("lists all tools with annotations", async () => {
+  await check("lists only the read tools, all marked read-only", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
-      "cancel_submission", "confirm_submission", "get_assignment", "get_grades", "get_syllabus", "get_upcoming",
-      "list_announcements", "list_assignments", "list_courses", "list_submission_files", "prepare_submission",
+      "get_assignment", "get_grades", "get_syllabus", "get_upcoming",
+      "list_announcements", "list_assignments", "list_courses",
     ]);
-    assert.equal(tools.find((t) => t.name === "confirm_submission")?.annotations?.destructiveHint, true);
-    assert.equal(tools.find((t) => t.name === "get_upcoming")?.annotations?.readOnlyHint, true);
+    for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
   });
 
   await check("list_courses follows pagination", async () => {
@@ -369,71 +363,15 @@ try {
     assert.match(out.syllabus, /40%/);
   });
 
-  await check("rejects wrong submission type and disallowed extension", async () => {
-    const r1: any = await call("prepare_submission", { course: "CS 240", assignment_id: 11, text: "hi" });
-    assert.equal(r1.isError, true);
-    const r2: any = await call("prepare_submission", { course: "CS 240", assignment_id: 11, file_name: "notes.txt" });
-    assert.match(r2.content[0].text, /only accepts: pdf/);
-    const r3: any = await call("prepare_submission", { course: "CS 240", assignment_id: 11, file_name: "../etc/passwd" });
-    assert.equal(r3.isError, true);
-  });
-
-  await check("blocks a text resubmission when attempts are used up", async () => {
-    const r: any = await call("prepare_submission", { course: "CS 240", assignment_id: 12, text: "again" });
-    assert.match(r.content[0].text, /attempts are used/);
-  });
-
-  await check("file submission: code goes to phone only, wrong code refused, right code submits", async () => {
-    const before = mock.state.ntfy.length;
-    const prep = parse(await call("prepare_submission", { course: "CS 240", assignment_id: 11, file_name: "factory.pdf" }));
-    assert.equal(prep.status, "waiting_for_approval");
-    const note = mock.state.ntfy[before];
-    const code = note.body.match(/Code: (\d{6})/)![1];
-    assert.ok(!JSON.stringify(prep).includes(code), "code leaked into the tool result");
-    assert.equal(mock.state.submissions.length, 0);
-
-    const wrong: any = await call("confirm_submission", { pending_id: prep.pending_id, approval_code: code === "000000" ? "111111" : "000000" });
-    assert.match(wrong.content[0].text, /Wrong approval code. 2 attempt/);
-    assert.equal(mock.state.submissions.length, 0);
-
-    const ok = parse(await call("confirm_submission", { pending_id: prep.pending_id, approval_code: code }));
-    assert.equal(ok.status, "submitted");
-    assert.equal(mock.state.submissions.length, 1);
-    assert.equal(mock.state.submissions[0].form["submission[file_ids][]"], "555");
-    assert.deepEqual(mock.state.uploads[0].fields, ["key", "signature", "file"]);
-
-    const replay: any = await call("confirm_submission", { pending_id: prep.pending_id, approval_code: code });
-    assert.equal(replay.isError, true, "a code must not be reusable");
-  });
-
-  await check("three wrong codes cancel the pending submission", async () => {
-    const prep = parse(await call("prepare_submission", { course: "CS 240", assignment_id: 13, url: "https://example.com/portfolio" }));
-    const code = mock.state.ntfy.at(-1)!.body.match(/Code: (\d{6})/)![1];
-    const bad = code === "000000" ? "999999" : "000000";
-    for (let i = 0; i < 3; i++) await call("confirm_submission", { pending_id: prep.pending_id, approval_code: bad });
-    const r: any = await call("confirm_submission", { pending_id: prep.pending_id, approval_code: code });
-    assert.equal(r.isError, true);
-    assert.equal(mock.state.submissions.length, 1);
-  });
-
-  await check("cancel_submission discards and lists pending", async () => {
-    const prep = parse(await call("prepare_submission", { course: "CS 240", assignment_id: 13, url: "https://example.com/p" }));
-    let out = parse(await call("cancel_submission", {}));
-    assert.equal(out.still_pending.length, 1);
-    out = parse(await call("cancel_submission", { pending_id: prep.pending_id }));
-    assert.equal(out.cancelled, prep.pending_id);
-    assert.equal(out.still_pending, undefined);
-  });
-
-  await check("Canvas token never sent to the storage host", async () => {
+  await check("every Canvas request was an authenticated GET", async () => {
     assert.equal(mock.state.unauthorized, 0);
+    assert.deepEqual([...mock.state.canvasMethods], ["GET"]);
   });
 
   await client.close();
 } finally {
   proc.kill();
   mock.close();
-  await fs.rm(subsDir, { recursive: true, force: true });
   await fs.rm(dataDir, { recursive: true, force: true });
   console.log(`\n${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);
 }

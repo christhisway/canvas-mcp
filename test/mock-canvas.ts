@@ -1,5 +1,6 @@
-// A tiny fake Canvas (plus fake Microsoft sign-in and ntfy) used by the smoke test. Shapes follow the real API closely
-// enough to exercise pagination, the file-upload dance, and submissions.
+// A tiny fake Canvas (plus fake Microsoft sign-in) used by the smoke test. Shapes follow the real API closely
+// enough to exercise pagination and the read tools. It records every Canvas request's method so the test can
+// check the server never writes.
 import express from "express";
 import type { AddressInfo } from "node:net";
 
@@ -18,9 +19,7 @@ export async function startMockCanvas() {
   app.use(express.urlencoded({ extended: false }));
 
   const state = {
-    submissions: [] as Array<{ courseId: string; assignmentId: string; form: Record<string, unknown> }>,
-    uploads: [] as Array<{ fields: string[]; bytes: number }>,
-    ntfy: [] as Array<{ title?: string; body: string }>,
+    canvasMethods: new Set<string>(),
     unauthorized: 0,
     msTokenRequests: [] as Array<Record<string, string>>,
   };
@@ -30,6 +29,7 @@ export async function startMockCanvas() {
 
   // Auth on everything under /api/v1
   app.use("/api/v1", (req, res, next) => {
+    state.canvasMethods.add(req.method);
     if (req.headers.authorization !== `Bearer ${TOKEN}`) {
       state.unauthorized++;
       return res.status(401).json({ errors: [{ message: "Invalid access token." }] });
@@ -101,25 +101,6 @@ export async function startMockCanvas() {
     );
   });
 
-  // File upload: step 1 ticket, step 2 storage POST (302 → confirm), step 3 confirm.
-  app.post("/api/v1/courses/:cid/assignments/:aid/submissions/self/files", (req, res) => {
-    res.json({ upload_url: `http://${req.headers.host}/storage/upload`, upload_params: { key: "abc", signature: "sig" } });
-  });
-  app.post("/storage/upload", express.raw({ type: "multipart/form-data", limit: "50mb" }), (req, res) => {
-    if (req.headers.authorization) return res.status(400).send("storage must not receive the Canvas token");
-    const raw = (req.body as Buffer).toString("latin1");
-    const fields = [...raw.matchAll(/form-data; name="([^"]+)"/g)].map((m) => m[1]);
-    state.uploads.push({ fields, bytes: (req.body as Buffer).length });
-    res.redirect(302, `http://${req.headers.host}/api/v1/files/555`);
-  });
-  app.get("/api/v1/files/555", (_req, res) => res.json({ id: 555, display_name: "upload" }));
-
-  app.post("/api/v1/courses/:cid/assignments/:aid/submissions", (req, res) => {
-    state.submissions.push({ courseId: req.params.cid, assignmentId: req.params.aid, form: req.body });
-    mySubs[req.params.aid] = { workflow_state: "submitted", submitted_at: new Date().toISOString(), score: null, grade: null, attempt: 1, late: req.params.aid === "12" };
-    res.json(mySubs[req.params.aid]);
-  });
-
   // Stand-in for Microsoft sign-in. The test drives the browser part itself (it reads the authorize
   // redirect and calls /callback directly), so only the token endpoint and Graph /me are needed.
   // The Microsoft code picks the account: "ms-code-<who>".
@@ -149,12 +130,6 @@ export async function startMockCanvas() {
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],
     });
-  });
-
-  // Stand-in for ntfy.sh
-  app.post("/ntfy/topic", express.text({ type: "*/*" }), (req, res) => {
-    state.ntfy.push({ title: req.headers.title as string | undefined, body: String(req.body) });
-    res.json({ id: "n1" });
   });
 
   const server = await new Promise<import("node:http").Server>((resolve) => {

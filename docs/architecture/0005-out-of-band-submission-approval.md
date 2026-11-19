@@ -1,6 +1,6 @@
 # 5. Every submission needs an out-of-band approval code
 
-- **Status:** Accepted
+- **Status:** Superseded by [9](0009-read-only-no-submissions.md)
 - **Date:** 2026-11-19 (designed in the claude.ai session that produced the first version)
 
 ## Context

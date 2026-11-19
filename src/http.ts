@@ -59,8 +59,8 @@ const bearer = requireBearerAuth({
   expectedResource: provider.resource,
 });
 
-// Stateless Streamable HTTP: a fresh server + transport per request. Approval
-// state lives in `shared`, so it survives across requests.
+// Stateless Streamable HTTP: a fresh server + transport per request. The Canvas
+// client and course cache live in `shared`, so they survive across requests.
 app.all("/mcp", bearer, async (req: Request, res: Response) => {
   if (req.method !== "POST") {
     res.status(405).set("Allow", "POST").json({
@@ -89,7 +89,6 @@ app.all("/mcp", bearer, async (req: Request, res: Response) => {
 
 app.listen(config.port, config.host, () => {
   console.log(`Canvas MCP listening on http://${config.host}:${config.port} · public ${provider.resource.href}`);
-  console.log(`Canvas: ${config.canvasBaseUrl} · submissions folder: ${config.submissionsDir}`);
+  console.log(`Canvas: ${config.canvasBaseUrl} (read-only)`);
   console.log(`Allowed accounts: ${config.allowedEmails.length ? config.allowedEmails.join(", ") : "NONE (nobody can connect)"}`);
-  console.log(config.ntfyUrl ? "Approval codes go to ntfy." : "NTFY_URL not set: approval codes will print here.");
 });

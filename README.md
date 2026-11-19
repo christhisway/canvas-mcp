@@ -1,6 +1,6 @@
 # canvas-mcp
 
-A personal MCP connector for Canvas LMS. Claude can read your courses, what's due, assignments, grades, announcements and syllabi, and it can submit work, but only after you approve each submission with a one-time code sent to your phone.
+A personal, read-only MCP connector for Canvas LMS. Claude can read your courses, what's due, assignments, grades, announcements and syllabi. It can't submit or change anything; you hand work in yourself ([ADR 9](docs/architecture/0009-read-only-no-submissions.md)).
 
 It runs as a Node server on a Mac at home, published over HTTPS with Tailscale Funnel. You connect it in claude.ai by signing in with your Microsoft account, the same way as the Microsoft To Do connector.
 
@@ -15,10 +15,6 @@ It runs as a Node server on a Mac at home, published over HTTPS with Tailscale F
 | `get_grades` | Overall score, assignment-group weights, graded scores |
 | `list_announcements` | Recent announcements from one or all courses |
 | `get_syllabus` | Syllabus page as text |
-| `list_submission_files` | Files in the submissions folder |
-| `prepare_submission` | Step 1: validates and stages a text, URL or file submission, then sends you an approval code |
-| `confirm_submission` | Step 2: submits, only with the code you type in |
-| `cancel_submission` | Discards a staged submission, or lists pending ones |
 
 Courses can be named by code or name ("CS 240", "philosophy"), not just by numeric id.
 
@@ -30,23 +26,15 @@ Claude ──▶ https://<machine>.<tailnet>.ts.net/mcp (Bearer token, via Tails
    └─ connect: /authorize (consent page) ──▶ Microsoft sign-in ──▶ /callback ──▶ /token ──▶ token back to Claude
 ```
 
-- **Access.** The server is its own OAuth 2.1 authorization server, built on the MCP SDK's auth router. To connect, you approve a consent page and sign in with Microsoft. Only accounts in `ALLOWED_EMAILS` get through, and if the list is empty nobody does. Microsoft is used only to check who you are; no Microsoft token is kept. Canvas is reached with your Canvas token, which never leaves the server.
+- **Access.** The server is its own OAuth 2.1 authorization server, built on the MCP SDK's auth router. To connect, you approve a consent page and sign in with Microsoft. Only accounts in `ALLOWED_EMAILS` get through, and if the list is empty nobody does. Microsoft is used only to check who you are; no Microsoft token is kept. Canvas is reached with your Canvas token, which never leaves the server, and only with GET requests.
 - **Clients.** claude.ai identifies itself with a Client ID Metadata Document, which the server accepts only from hosts in `CIMD_ALLOWED_HOSTS` (default `claude.ai`). Other clients, such as the MCP Inspector, use dynamic client registration.
 - **Tokens.** Access tokens last 1 hour. Refresh tokens last 30 days, rotate on every use, and are extended each time they're used. Only SHA-256 hashes are stored, in `DATA_DIR/oauth.json` (mode 0600). `deploy/ctl.sh revoke` signs everything out.
 
-Why it's built this way (Node on a home server, Microsoft sign-in, Funnel, approval codes) is recorded in [docs/architecture/](docs/architecture/README.md).
-
-### Submission approval
-
-1. You ask Claude to submit something. It calls `prepare_submission`, which checks the assignment: accepted types, file extensions, attempts left, and lock state. The tool then stores the exact payload on the server and pushes a notification to your phone via [ntfy](https://ntfy.sh) with a summary and a 6-digit code.
-2. Claude shows you the preview and asks for the code. The code never appears in any tool result, so Claude can't approve on its own.
-3. You type the code. `confirm_submission` submits exactly what was staged. Files are hashed when they're staged, so they can't be swapped afterwards.
-
-Codes expire after 15 minutes and are single-use, and three wrong guesses cancel the submission. Files can only come from `SUBMISSIONS_DIR`; nothing else on the machine can be read. Pending submissions live in memory, so a restart clears them. That's intentional.
+Why it's built this way (Node on a home server, Microsoft sign-in, Funnel, read-only) is recorded in [docs/architecture/](docs/architecture/README.md).
 
 ## Deploy (on the server Mac)
 
-**Follow [docs/deploy-checklist.md](docs/deploy-checklist.md).** It's the step-by-step list, from preparing the Mac to the first real submission.
+**Follow [docs/deploy-checklist.md](docs/deploy-checklist.md).** It's the step-by-step list, from preparing the Mac to the first real use in claude.ai.
 
 The server runs as a dedicated **standard** macOS user (`devserver`) that logs in automatically. Your admin account does the system setup. FileVault is off so automatic login works, which is why the disk holds only secrets you can revoke ([ADR 8](docs/architecture/0008-dedicated-user-filevault-off.md)). In outline:
 
@@ -67,7 +55,6 @@ The server runs as a dedicated **standard** macOS user (`devserver`) that logs i
 4. **Gather the secrets:**
    - Azure: add `<PUBLIC_URL>/callback` to the To Do app registration and create a separate client secret
    - Canvas: a personal access token that **expires at the end of the semester**
-   - ntfy: a long random topic
 5. **Fill in `.env`,** then run `deploy/ctl.sh install`. It builds the server, writes a launchd agent with this Mac's paths, and starts it.
 6. **Add `<PUBLIC_URL>/mcp`** as a custom connector in claude.ai and sign in with Microsoft.
 

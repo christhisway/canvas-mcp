@@ -51,6 +51,8 @@ check_env() {
     if [[ -z "$v" || "$v" == *replace* || "$v" == *example.com* || "$v" == *yourschool* || "$v" == *your-tailnet* || "$v" == you@* || "$v" == 00000000-* ]]; then missing+=("$k"); fi
   done
   ((${#missing[@]} == 0)) || die ".env still has placeholders or blanks for: ${missing[*]}"
+  local stale; stale="$(grep -oE '^(NTFY_URL|NTFY_TOKEN|SUBMISSIONS_DIR|APPROVAL_TTL_MINUTES)=' .env | tr -d = | tr '\n' ' ' || true)"
+  [[ -z "$stale" ]] || echo "note: .env has settings that are no longer used (submissions were removed, ADR 9); you can delete: $stale" >&2
   [[ "$(stat -f %Lp .env)" == "600" ]] || { chmod 600 .env; echo "set .env to mode 600"; }
 }
 

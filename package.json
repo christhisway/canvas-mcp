@@ -1,7 +1,7 @@
 {
   "name": "canvas-mcp",
-  "version": "0.1.0",
-  "description": "Personal Canvas LMS MCP connector (read + approval-gated submissions), OAuth via Microsoft sign-in",
+  "version": "0.2.0",
+  "description": "Personal read-only Canvas LMS MCP connector, OAuth via Microsoft sign-in",
   "main": "dist/http.js",
   "scripts": {
     "build": "tsc",

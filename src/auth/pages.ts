@@ -16,7 +16,7 @@ export function consentBody(opts: {
     ? `<p class="warn">This app redirects to your own computer (${esc(opts.redirectHost)}). Any local program could receive access. Only continue if you started this.</p>`
     : "";
   return `
-    <p><strong>${esc(opts.clientName)}</strong>${host} wants to read your Canvas courses, assignments and grades, and to prepare submissions. Each submission still needs the code sent to your phone.</p>
+    <p><strong>${esc(opts.clientName)}</strong>${host} wants to read your Canvas courses, assignments, grades and announcements. It can't submit or change anything.</p>
     <p class="muted">After approving, you'll sign in with Microsoft. Access will be sent to <strong>${esc(opts.redirectHost)}</strong>.</p>
     ${loopbackWarning}
     <form method="POST" action="/consent">
