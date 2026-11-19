@@ -93,8 +93,11 @@ export async function startMockCanvas() {
   });
 
   const courses = [
-    { id: 101, name: "Software Design", course_code: "CS 240", term: { name: "Fall 2026", end_at: iso(40) }, enrollments: [{ type: "student", computed_current_score: 93.4, computed_current_grade: "A", computed_final_score: 71.2, computed_final_grade: "C-" }] },
-    { id: 202, name: "Philosophy of Mind", course_code: "PHIL 230", term: { name: "Fall 2026" }, enrollments: [{ type: "student", computed_current_score: 88.1, computed_current_grade: "B+" }] },
+    // Scores match what Canvas would compute from the assignment groups below (grade_whatif checks this).
+    // CS 240 weights its groups and uses Canvas's default letter scale.
+    { id: 101, name: "Software Design", course_code: "CS 240", term: { name: "Fall 2026", end_at: iso(40) }, apply_assignment_group_weights: true, grading_standard_id: null, enrollments: [{ type: "student", computed_current_score: 93.4, computed_current_grade: "A-", computed_final_score: 57.8, computed_final_grade: "F" }] },
+    // PHIL 230 counts total points, drops the lowest quiz, and has its own letter scale.
+    { id: 202, name: "Philosophy of Mind", course_code: "PHIL 230", term: { name: "Fall 2026" }, apply_assignment_group_weights: false, grading_standard_id: 5, enrollments: [{ type: "student", computed_current_score: 83.75, computed_current_grade: "B", computed_final_score: 49.63, computed_final_grade: "F" }] },
     // Enrollments Canvas still calls "active" although the course is over (issue #1).
     { id: 303, name: "Intro to Geology", course_code: "GEOL 101", term: { name: "Fall 2025", end_at: iso(-320) }, enrollments: [{ type: "student", computed_current_score: 91, computed_current_grade: "A-" }] },
     { id: 404, name: "World History", course_code: "HIST 105", concluded: true, term: { name: "Spring 2026" }, enrollments: [{ type: "student" }] },
@@ -162,6 +165,14 @@ export async function startMockCanvas() {
     // No due date, so never on the planner (issue #4); one still to do, one already handed in.
     "15": { id: 15, course_id: 202, name: "Group report", description: null, due_at: null, lock_at: null, unlock_at: null, points_possible: 50, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/202/assignments/15" },
     "16": { id: 16, course_id: 202, name: "Reading response", description: null, due_at: null, lock_at: null, unlock_at: null, points_possible: 5, submission_types: ["online_text_entry"], html_url: "https://canvas.test/courses/202/assignments/16" },
+    "17": { id: 17, course_id: 101, name: "Strategy Pattern Writeup", description: null, due_at: iso(-10), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/101/assignments/17" },
+    // PHIL 230's graded work. Dropping the lowest *percentage* quiz (21) would be wrong: dropping 22 leaves
+    // 22/30, a better ratio than 25/40. Quiz 4 is excused.
+    "21": { id: 21, course_id: 202, name: "Quiz 1", description: null, due_at: iso(-40), lock_at: null, unlock_at: null, points_possible: 10, submission_types: ["online_quiz"], html_url: "https://canvas.test/courses/202/assignments/21" },
+    "22": { id: 22, course_id: 202, name: "Quiz 2", description: null, due_at: iso(-30), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_quiz"], html_url: "https://canvas.test/courses/202/assignments/22" },
+    "23": { id: 23, course_id: 202, name: "Quiz 3", description: null, due_at: iso(-20), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_quiz"], html_url: "https://canvas.test/courses/202/assignments/23" },
+    "24": { id: 24, course_id: 202, name: "Quiz 4", description: null, due_at: iso(-10), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_quiz"], html_url: "https://canvas.test/courses/202/assignments/24" },
+    "25": { id: 25, course_id: 202, name: "Essay 1", description: null, due_at: iso(-15), lock_at: null, unlock_at: null, points_possible: 50, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/202/assignments/25" },
     "14": { id: 14, course_id: 101, name: "Observer Pattern Writeup", description: null, due_at: iso(-4), lock_at: null, unlock_at: null, points_possible: 20, submission_types: ["online_upload"], html_url: "https://canvas.test/courses/101/assignments/14" },
   };
   const mySubs: Record<string, any> = {
@@ -171,6 +182,12 @@ export async function startMockCanvas() {
     // Past due, never handed in, not graded: invisible in the current score (issue #2).
     "14": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null, missing: true },
     "15": { workflow_state: "unsubmitted", submitted_at: null, score: null, grade: null, attempt: null },
+    "17": { workflow_state: "graded", submitted_at: iso(-11), score: 17.8, grade: "17.8", attempt: 1 },
+    "21": { workflow_state: "graded", submitted_at: iso(-40), score: 2, grade: "2", attempt: 1 },
+    "22": { workflow_state: "graded", submitted_at: iso(-30), score: 5, grade: "5", attempt: 1 },
+    "23": { workflow_state: "graded", submitted_at: iso(-20), score: 20, grade: "20", attempt: 1 },
+    "24": { workflow_state: "graded", submitted_at: null, score: null, grade: null, attempt: null, excused: true },
+    "25": { workflow_state: "graded", submitted_at: iso(-16), score: 45, grade: "45", attempt: 1 },
     "16": { workflow_state: "submitted", submitted_at: iso(-3), score: null, grade: null, attempt: 1 },
   };
 
@@ -190,11 +207,26 @@ export async function startMockCanvas() {
   app.get("/api/v1/courses/:cid/assignments/:aid/submissions/self", (req, res) => {
     res.json(mySubs[req.params.aid]);
   });
-  app.get("/api/v1/courses/:cid/assignment_groups", (_req, res) => {
-    res.json([
-      { id: 1, name: "Writeups", group_weight: 60, assignments: ["11", "14"].map((id) => ({ ...assignments[id], submission: mySubs[id] })) },
-      { id: 2, name: "Participation", group_weight: 40, assignments: [{ ...assignments["12"], submission: mySubs["12"] }] },
-    ]);
+  const withSubs = (ids: string[]) => ids.map((id) => ({ ...assignments[id], submission: mySubs[id] }));
+  app.get("/api/v1/courses/:cid/assignment_groups", (req, res) => {
+    const groups: Record<string, unknown[]> = {
+      "101": [
+        { id: 1, name: "Writeups", group_weight: 60, rules: {}, assignments: withSubs(["17", "11", "14"]) },
+        { id: 2, name: "Participation", group_weight: 40, rules: {}, assignments: withSubs(["12"]) },
+      ],
+      "202": [
+        { id: 3, name: "Quizzes", group_weight: 0, rules: { drop_lowest: 1 }, assignments: withSubs(["21", "22", "23", "24"]) },
+        { id: 4, name: "Essays", group_weight: 0, rules: {}, assignments: withSubs(["25", "15", "16"]) },
+      ],
+    };
+    res.json(groups[req.params.cid] ?? []);
+  });
+  app.get("/api/v1/courses/:cid/grading_standards", (req, res) => {
+    if (req.params.cid !== "202") return res.json([]);
+    const cutoffs: Array<[string, number]> = [
+      ["A", 0.93], ["A-", 0.9], ["B+", 0.87], ["B", 0.83], ["B-", 0.8], ["C+", 0.77], ["C", 0.73], ["C-", 0.7], ["D+", 0.67], ["D", 0.6], ["F", 0],
+    ];
+    res.json([{ id: 5, title: "Philosophy scale", grading_scheme: cutoffs.map(([name, value]) => ({ name, value })) }]);
   });
 
   app.get("/api/v1/planner/items", (_req, res) => {

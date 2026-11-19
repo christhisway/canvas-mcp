@@ -307,7 +307,7 @@ try {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
-      "get_assignment", "get_grades", "get_syllabus", "get_upcoming",
+      "get_assignment", "get_grades", "get_syllabus", "get_upcoming", "grade_whatif",
       "list_announcements", "list_assignments", "list_courses", "read_file",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, true, `${t.name} isn't marked read-only`);
@@ -316,8 +316,8 @@ try {
   await check("list_courses follows pagination and leaves out ended courses", async () => {
     const out = parse(await call("list_courses"));
     assert.deepEqual(out.map((c: any) => c.code), ["CS 240", "PHIL 230"]);
-    assert.equal(out[0].current_grade, "A");
-    assert.equal(out[0].final_score, 71.2);
+    assert.equal(out[0].current_grade, "A-");
+    assert.equal(out[0].final_score, 57.8);
     const all = parse(await call("list_courses", { include_past: true }));
     assert.deepEqual(all.map((c: any) => [c.code, c.ended ?? false]), [
       ["CS 240", false], ["PHIL 230", false], ["GEOL 101", true], ["HIST 105", true],
@@ -353,7 +353,7 @@ try {
   await check("resolves a course by code and lists assignments", async () => {
     const out = parse(await call("list_assignments", { course: "cs240" }));
     assert.equal(out.course_id, 101);
-    assert.equal(out.assignments.length, 4);
+    assert.equal(out.assignments.length, 5);
   });
 
   await check("ambiguous / unknown course gives a helpful error", async () => {
@@ -373,11 +373,56 @@ try {
     assert.equal(out.groups[1].group_score_percent, 100);
     assert.equal(out.groups[0].ungraded_count, 2);
     assert.equal(out.current_score, 93.4);
-    assert.equal(out.final_score, 71.2);
-    assert.equal(out.final_grade, "C-");
+    assert.equal(out.final_score, 57.8);
+    assert.equal(out.final_grade, "F");
     assert.equal(out.missing_count, 1);
     assert.deepEqual(out.groups[0].missing.map((a: any) => a.name), ["Observer Pattern Writeup"]);
     assert.equal(out.groups[1].missing, undefined);
+  });
+
+  await check("grade_whatif matches Canvas in a weighted course and finds what's needed for a target", async () => {
+    const out = parse(await call("grade_whatif", { course: "CS 240", target: "C" }));
+    assert.equal(out.weighted, true);
+    assert.equal(out.letter_scale, "Canvas default");
+    assert.deepEqual(out.now.current, { percent: 93.4, letter: "A-" });
+    assert.equal(out.now.current.percent, out.canvas.current_score);
+    assert.deepEqual(out.now.final, { percent: 57.8, letter: "F" });
+    assert.equal(out.notes, undefined);
+    // Writeups are 60%: 17.8/20 so far, 20 points still to do, the missing writeup counts as 0.
+    assert.equal(out.target.target_percent, 74);
+    assert.equal(out.target.needed_average_percent, 81);
+    assert.deepEqual(out.target.remaining.map((r: any) => r.name), ["Factory Pattern Writeup"]);
+    assert.deepEqual(out.target.counted_as_zero.map((r: any) => r.name), ["Observer Pattern Writeup"]);
+    const a = parse(await call("grade_whatif", { course: "CS 240", target: "A" }));
+    assert.equal(a.target.reachable, false);
+    assert.equal(a.target.best_possible, 77.8);
+    assert.match(a.target.note, /Unreachable/);
+    const lenient = parse(await call("grade_whatif", { course: "CS 240", target: "94%", count_missing_as_zero: false }));
+    assert.equal(lenient.target.needed_average_percent, 90.5);
+  });
+
+  await check("grade_whatif: unweighted course with drop-lowest, an excused quiz and the course's own scale", async () => {
+    const out = parse(await call("grade_whatif", { course: "PHIL 230", target: "B+" }));
+    assert.equal(out.weighted, false);
+    assert.match(out.letter_scale, /Philosophy scale/);
+    assert.deepEqual(out.now.current, { percent: 83.75, letter: "B" });
+    assert.equal(out.now.current.percent, out.canvas.current_score);
+    assert.equal(out.now.final.percent, out.canvas.final_score);
+    assert.deepEqual(out.groups[0].dropped_now, ["Quiz 2"]);
+    assert.equal(out.target.needed_average_percent, 91.8); // (67 + 55x) / 135 ≥ 0.87
+    assert.deepEqual(out.target.remaining.map((r: any) => r.name), ["Group report", "Reading response"]);
+    const what = parse(await call("grade_whatif", {
+      course: "PHIL 230",
+      hypotheticals: [{ name: "group report", score: 48 }, { assignment_id: 16, score: "80%" }],
+    }));
+    assert.deepEqual(what.hypotheticals.map((h: any) => [h.name, h.score]), [["Group report", 48], ["Reading response", 4]]);
+    assert.deepEqual(what.projected.current, { percent: 88.15, letter: "B+" }); // (67 + 48 + 4) / 135, nothing left ungraded
+    assert.deepEqual(what.projected.final, what.projected.current);
+    const ambiguous: any = await call("grade_whatif", { course: "PHIL 230", hypotheticals: [{ name: "quiz", score: 10 }] });
+    assert.equal(ambiguous.isError, true);
+    assert.match(ambiguous.content[0].text, /more than one assignment/);
+    const badLetter: any = await call("grade_whatif", { course: "PHIL 230", target: "D-" });
+    assert.match(badLetter.content[0].text, /isn't a percentage or a letter/);
   });
 
   await check("announcements across all courses", async () => {
